@@ -25,20 +25,15 @@ void listen(){
   int i = 0;
   bool tag = (rSerial.available() == tagLen) ? true : false;
 
-  if(tag){
-    while(rSerial.available()){
-      readByte = rSerial.read();
-      
-      if (readByte != 2 && readByte!= 13 && readByte != 10 && readByte != 3) {
-        newTag[i] = readByte;
-        i++;
-      }
-      if(readByte == 3) 
-        tag = false;
-    }
-  }
-  if(strlen(newTag) == 0)
+  if(!tag)
     return;
+
+  while(rSerial.available()){
+    readByte = rSerial.read();
+    if (readByte != 2 && readByte!= 13 && readByte != 10 && readByte != 3)
+      newTag[i++] = readByte;
+  }
+
 
   Serial.print("Tag #: ");
   Serial.println(newTag);
