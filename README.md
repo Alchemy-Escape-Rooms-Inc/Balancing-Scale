@@ -8,15 +8,18 @@ that are placed on the scale(plates), rather than measuring the actual weight.
 ## RFID Readers
  The RFID readers used in this setup are two [ID-12LA](https://www.digikey.com/en/products/detail/sparkfun-electronics/11827/7364971); one for each plate. They are 125kHz RFID reader modules by ID-innovations and can be sourced most notibly from [DigiKey](https://www.Digikey.com) and [Sparkfun](https://www.sparkfun.com/).
 The corresponding cards, stickers, fobs, etc. to be used with this reader must be 125kHz compatible to get a proper response from the reading module.
+![rfid](./res/rfid_pin.png)
 
 ## Controller
 The controller for this setup is the Arduino Nano. Its small compact size allow for it to conveniently be placed inside the scale's drawer. It is responsible for gathering and processing the information from the RFID readers.
+![arduino](./res/arduino_nano.png)
 
 ## Breakout Board
 A custom printed circuit board that was designed to receive the 2mm pitch pins from the RFID reader and provide a few additional pins to connect with the reader.
+![Breakout board](./res/bob.png)
 
 ## 3D Models
-The RFID reader is uncapable of properly broadcasting a signal through metal plates; therefore a 3D model was designed to be used. Within the plate design, a guide for the RFID cover housing was attached underneath the plate. The RFID readers while being placed under the plates, should not be exposed, therefore a cover housing was designed. They are connected to the plate using screws.  
+The RFID reader is uncapable of properly broadcasting a signal through metal plates; therefore a 3D model was designed to be used. Within the plate design, a guide for the RFID cover housing was attached underneath the plate. The RFID readers while being placed under the plates, should not be exposed, therefore a cover housing was designed. They are connected to the plate using screws.![Plate](./res/plate.png)
 
 ## Algorithm
 1. Plate 1 Listen for any rfid transmitter near by.
