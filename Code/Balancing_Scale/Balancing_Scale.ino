@@ -1,29 +1,41 @@
 #include <SoftwareSerial.h>
 
-#define NUM_VALID_IDS 15
-#define RED_LED 6
-#define GREEN_LED 7
+#define NUM_OF_SPICE_POUCHES 5
+#define NUM_OF_COINS 20
+#define NUM_VALID_IDS NUM_OF_SPICE_POUCHES + NUM_OF_COINS
 
 
 //---------DATA STRUCTURES---------------
 struct IDStorage {
-  char ids[][];
-  int index = 0;
+  char id[idLen];
+  float weight; 
 }
 
 //-----------GLOBAL VARIABLES--------------
 const int tagLen = 16;
 const int idLen = 13;
-const char validIDs[NUM_VALID_IDS] = {};
+
+
 
 SoftwareSerial rSerial1(2,3);
 SoftwareSerial rSerial2(4,5);
 
-IDStorage plate1, plate2;
+const IDStorage sPouches[NUM_OF_SPICE_POUCHES] = {
+  //example of an initialization of IDs and weights 
+  //ids             weights 
+  {{0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC}, 1.5},
+  {{0xED,0xBC,0xDF,0x43,0x32,0x58,0xAC,0xFE,0xDA,0x9A,0xC8,0xCD,0xFF}, 2.5}
+};
+
+const IDStorage coins[NUM_OF_COINS] = {
+  //example of an initialization of IDs and weights 
+  //ids             weights 
+  {{0x00,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x99,0xAA,0xBB,0xCC}, 0.75},
+  {{0xED,0xBC,0xDF,0x43,0x32,0x58,0xAC,0xFE,0xDA,0x9A,0xC8,0xCD,0xFF}, 1}
+};
+
 
 //-----------FUNCTIONS PROTOTYPES------------
-void _init();
-void gpio_init();
 
 void listen(const SoftwareSerial & rSerial);
 void checkForSuccess(const IDStorage & s1, const IDStorage & s2);
@@ -49,25 +61,16 @@ void loop(){
 
 
 //-----------------FUNCTIONS DEFINITIONS --------------------------
-void _init(){
-  gpio_init();
-}
-void gpio_init(){
-  pinMode(GREEN_LED,OUTPUT);
-  pinMode(RED_LED,OUTPUT);
-  digitalWrite(GREEN_LED,LOW);
-  digitalWrite(RED_LED,LOW);
-}
-
 void run(){
-  listen(rSerial1, plate1);
-  listen(rSerial2, plate2);
+  listen(rSerial1 , true);
+  listen(rSerial2 , false);
   checkForSuccess();
 }
 
-void listen(const SoftwareSerial & rSerial, IDStorage & storage){
+void listen(const SoftwareSerial & rSerial, bool isPlateForPouches){
   int rByte;  //capture bytes
   int i  = 0; //scope counter
+
   bool tag = (rSerial.available() == tagLen) ? true : false;  //Ensures the entire tag data is serial buffer
                                                               //if no tag is detected, leave
   if(!tag)
@@ -80,26 +83,23 @@ void listen(const SoftwareSerial & rSerial, IDStorage & storage){
       newTag[i++] = readByte;
   }
   
-  if(!isAValidID(newTag))
+  //get a reference of the appropriate storage
+  IDStorage & storage = (isPlateForPouches) ? sPouches : coins;
+  
+  if(!isAValidID(newTag, storage))
     return;
   if(isAlreadyStored(newTag, storage))
     return;
-  storeID(newTag,storage);
+  storeID();
 }
 
 void checkForSuccess(){
   
 }
 
-void storeID(char id[], IDStorage & storage){
-  int index = storage.index;
-  for(int i = 0; i < tagLen; i++)
-    storage.ids[index][i] = id[i];
-  storage.index++;
+void storeID(){
 }
-
 void removeID(char id[], IDStorage & storage){
-  storage.index--;
 }
 
 bool isAMatchingID(char id1[], char id2[]){
@@ -109,24 +109,20 @@ bool isAMatchingID(char id1[], char id2[]){
   return true;
 }
 
-bool isAValidID(char id[]){
+bool isAValidID(char id[], const IDStorage & storage){
   for(int i = 0; i < NUM_VALID_IDS; i++ )
-    if(isAMatchingID(id,validIDs[i]))
+    if(isAMatchingID(id,storage.id[i]))
       return true;
   return false;
 }
 
 bool isAlreadyStored(char id[], const IDStorage & storage){
   for(int i  = 0; i < storage.index; i++)
-    if(isAMatchingID(id,storage.ids[i]))
+    if(isAMatchingID(id,storage[i].id))
       return true;
   return false;
 }
 
 
 int findID(char id[], const IDStorage & storage){
-  for(int i = 0; i < storage.index; i++)
-      if(isAMatchingID(id,storage.ids[i]))
-        return i;
-  return -1;
 }
