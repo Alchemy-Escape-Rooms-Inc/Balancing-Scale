@@ -1,0 +1,65 @@
+***** 11/23/2025 *****
+During the code development, there were a few scenarios I had considered: 
+
+1) User places either the pouch(es) or the coin(s) on 
+the wrong scale's plate. This would register the RFID 
+tag and associated weight to the incorrect plate.
+	a) Possible solution : Label the plates for the 
+	proper type of item to be weigh.
+
+2) More than one pouch is placed on the pouches plate. 
+Too many coins were placed on the coins plate. 
+	a) Possible solution: Add into code, to be able 
+	to remove RFID information from associated plates.
+
+3) A way to check for the correct weight of the spice 
+pouches and the coins on the scale. 
+	a) Possible solution: Add a button to check if 
+	the current placement of pouch(es) and coin 
+	denominations are correct. (Weight match)
+
+The first scenario presented the problem where the spice 
+pouches and coins carry the same information (ID and weight), 
+but are treated differently in our code. Therefore, the 
+incorrect placement of either items mean, we would need to 
+be able to remove the stored information from the registering
+plate. 
+
+The second scenario is only a problem to prove that a function
+for removing the stored information, of the extra placed items, 
+from the registering plate.
+
+I designed the data removal function, but it was on the condition 
+that the RFID reader is capable of continously detecting the 
+items on the plate. So, I test the RFID with a tag placed over it. 
+As it stands, it is not able to continously detect the tag therefore 
+if the tag has physical been removed, there isn't a way for the 
+RFID reader to detect that. Which would then allow for calling of 
+removal function in the code. 
+
+
+The third scenario presented a problem because the user should be 
+able to tell the program when to check if the combination of spice 
+pouch(es) and coins are valid. Otherwise, the code would have to 
+continously check whether if items were placed on the scale's plate 
+or not. Since, the RFID can't detect when an item is physically 
+removed off a plate and there isn't a reset vector, then the 
+continous combination checks would be false. 
+
+
+RESOLUTION: 
+1) Label the scale's plates appropriately, one for the
+spice pouches and one for the coins. 
+2) Create 2 buttons, one serves as to call the reset function and 
+the other serves to check in the correct combination of items were
+placed on the scale's plates. 
+	a) When the user press the check button, the program verify
+	if the correct combination is present and rotate the arrow 
+	to "Yay" or "Nay". Then shortly return to prior position.
+	b) When the user wishes to remove an item, or restart from 
+	the beginning, the reset button should be pressed. In either
+	case, all items should be removed from the scale and then 
+	the reset button should be pressed.
+
+
+
