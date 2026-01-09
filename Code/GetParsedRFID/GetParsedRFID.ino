@@ -1,6 +1,6 @@
 #include <SoftwareSerial.h>
 
-SoftwareSerial rSerial(11,12);
+SoftwareSerial rSerial(9,10);
 
 const int tagLen = 16;
 const int idLen = 13;
