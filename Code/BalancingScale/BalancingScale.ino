@@ -1,41 +1,67 @@
+//=============================================================
+//                        MACROS
+//=============================================================
+#pragma once
+
+#include <WiFi.h>
+#include <PubSubClient.h>
 #include <SoftwareSerial.h>
-#include <Servo.h>
+#include <ESP32Servo.h>
+
+#define VERSION "1.0.0"
+
+#define GAME_NAME "MermaidsTale"
+#define PROP_NAME "BalancingScale"
+
+#define MQTT_TOPIC_COMMAND  "MermaidsTale/BalancingScale/command"
+#define MQTT_TOPIC_STATUS   "MermaidsTale/BalancingScale/status"
+#define MQTT_TOPIC_LOG      "MermaidsTale/BalancingScale/log"
+#define MQTT_TOPIC_MESSAGE  "MermaidsTale/BalancingScale/message"
+#define MQTT_TOPIC_SYSTEM   "MermaidsTale/BalancingScale/system"
 
 
-#define TAG_LENGTH 16
-#define ID_LENGTH 13
 #define NUM_OF_SPICE_POUCHES 5
-#define NUM_OF_COINS 20
-#define RST_BT 4
-#define CHK_BT 5
-#define SERVO_PIN
+#define NUM_OF_COINS 8
+#define SERVO_PIN 35
 
+#define RX1 19
+#define TX1 18
 
-//**************** DATA STRUCTURES ***********************
+#define RX2 16
+#define TX2 17
+#define BAUD_RATE 115200
+#define ID_LENGTH 4
+#define MAX_READABLE 5                //RFIDs can only read 5 tags at once.
+
+#define SPICESERIAL Serial1
+#define COINSERIAL  Serial2
+//=============================================================
+//                      DATA STRUCTURE(S)
+//=============================================================
 
 /**
- * @brief A struct/container for holding a pair of values, 
+ * @brief A struct/container for holding a pair of values,
  *        the RFID(ID) and the represented weight.
- * @tparam N The maximum number of elements to 
- *           represent the ID received from the RFID. 
+ * @tparam N The maximum number of elements to
+ *           represent the ID received from the RFID.
  */
 
 template<byte N>
 struct IDStorage {
   float weight;       //Represented weight of the RFID object.
-  char id[ID_LENGTH]; //ID of the RFID object. 
+  char id[ID_LENGTH]; //ID of the RFID object.
 
   /**
    * @brief Default constructor, which initialize all values to 0.
    */
   IDStorage()
-    : weight(0.0), id{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } {}
+    : weight(0.0), id{ 0, 0, 0, 0 } {}
   /**
-   * @brief Constructor, which initialize the members using  
+   * @brief Constructor, which initialize the members using
    *        the arguments.
-   * @param vWeight Weight value to be assign to RFID the 
+   * @param vWeight Weight value to be assign to RFID the
    *                object.
-   * @param &vID A constant array of char literals of size N. 
+   * @param &vID A constant array of char literals of size N.
    */
   IDStorage(float vWeight, const char (&vID)[N])
     : weight(vWeight) {
@@ -44,10 +70,10 @@ struct IDStorage {
     }
 
   /**
-   * @brief Constructor, which initialize the members using  
+   * @brief Constructor, which initialize the members using
    *        the arguments.
    * @param vWeight Weight value to be assign to RFID object.
-   * @param vID An array of char. 
+   * @param vID An array of char.
    */
   IDStorage(float vWeight, char vID[]):weight(vWeight) {
     for (int i = 0; i < ID_LENGTH; i++)
@@ -60,15 +86,15 @@ struct IDStorage {
  * @brief A derived struct of the IDStorage struct to
  *        hold values specifically for the RFID coins
  *        object demonations.
- * @tparam N The maximum number of elements to 
- *           represent the ID received from the RFID. 
+ * @tparam N The maximum number of elements to
+ *           represent the ID received from the RFID.
  */
 template<byte N>
 struct Coin : IDStorage<N> {
   /**
-   * @brief Constructor, which initialize the members using 
+   * @brief Constructor, which initialize the members using
    *        the arguments.
-   * @param vWeight Weight value to be assign to the RFID 
+   * @param vWeight Weight value to be assign to the RFID
    *                object.
    * @param &vID A constant array of char literals of size N.
    */
@@ -100,22 +126,25 @@ struct QuarterDoubloon : Coin<N> {
 //POUCH
 template<byte N>
 struct Pouch : IDStorage<N> {
+  const String spice;
   Pouch(float vWeight, const char (&vID)[N])
     : IDStorage<N>(vWeight, vID) {}
+  Pouch(const String & vSpice, float vWeight, const char (&vID)[N])
+    : spice(vSpice), IDStorage<N>(vWeight,vID){}
 };
 
 //PLATES
 
 /**
- * @brief A struct/container to hold a few values, for 
- *        keeping track of the RFID objects placed on the 
- *        scale's plates. 
- * @tparam N The maximum number of IDs that can stored for 
+ * @brief A struct/container to hold a few values, for
+ *        keeping track of the RFID objects placed on the
+ *        scale's plates.
+ * @tparam N The maximum number of IDs that can stored for
  *           this struct's object.
  */
 template<byte N>
 struct ScalePlates {
-  IDStorage<ID_LENGTH> storage[N];  //An array of the IDs stored 
+  IDStorage<ID_LENGTH> storage[N];  //An array of the IDs stored
   byte index = 0;                   //Value to keep track of the amount of stored IDs
   float plateWeight = 0.0;          //Represents the total amount of RFID objects placed on the scale's plate.
 
@@ -131,10 +160,10 @@ struct ScalePlates {
     plateWeight += vWeight;
     index++;
   }
-  
+
   /**
-   * @brief Removes a RFID object from the storage. 
-   * @param rIndex Index of RFID object that is to be 
+   * @brief Removes a RFID object from the storage.
+   * @param rIndex Index of RFID object that is to be
    *               removed from the storage.
    */
   void removeStorage(int rIndex){
@@ -148,10 +177,10 @@ struct ScalePlates {
   }
 
   /**
-   * @brief Shifts all the RFID object information in 
-   *        the array storage to the left overriding 
+   * @brief Shifts all the RFID object information in
+   *        the array storage to the left overriding
    *        one of stored objects.
-   * @param sIndex Index of the stored object to be 
+   * @param sIndex Index of the stored object to be
    *               overriden by the left shift.
    */
   void shiftStorageLeft(int sIndex){
@@ -167,8 +196,8 @@ struct ScalePlates {
 
   /**
    * @brief Clears/Sets all the RFID object information
-   *        to 0. 
-   * @param cIndex Index of the stored object information 
+   *        to 0.
+   * @param cIndex Index of the stored object information
    *               to be cleared.
    */
   void clearStorage(int cIndex){
@@ -178,55 +207,243 @@ struct ScalePlates {
   }
 };
 
-//*************gg***** GLOBAL VARIABLES ****************************
-char newTag[ID_LENGTH];
-SoftwareSerial rSerial1(9, 10);
-SoftwareSerial rSerial2(11, 12);
+//=============================================================
+//                      GLOBAL VARIABLES
+//=============================================================
+
+char CMD_GET_TAG_COUNT[] = { 0xF5, 0x03, 0x00, 0xFC, 0xFF, 0x02, 0xB2, 0xC1 };
+char CMD_GET_UID[] = { 0xF5, 0x04, 0x00, 0xFB, 0xFF, 0x03, 0x00, 0x5C, 0x48 };
+char CMD_HALT[] = { 0xF5, 0x03, 0x00, 0xFC, 0xFF, 0x05, 0x55, 0xB1 };
+char CMD_REBOOT[] = { 0xF5, 0x03, 0x00, 0xFC, 0xFF, 0x0A, 0xBA, 0x40 };
+char CMD_DUMMY[] = { 0xF5, 0x03, 0x00, 0xFC, 0xFF, 0x01, 0xD1, 0xF1 };
+
 Servo mServo;
 
-// const Pouch<ID_LENGTH> sPouches[NUM_OF_SPICE_POUCHES] = {
-//   Pouch<ID_LENGTH>({ 0xED, 0xBC, 0xDF, 0x43, 0x32, 0x58, 0xAC, 0xFE, 0xDA, 0x9A, 0xC8, 0xCD, 0xFF }),
-//   Pouch<ID_LENGTH>({ 0xED, 0xCD, 0xDF, 0x43, 0x32, 0x45, 0xAC, 0xFE, 0x23, 0x9A, 0xC8, 0x45, 0xFF })
-// };
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
 
-// const Coin<ID_LENGTH> coins[NUM_OF_COINS] = {
-//   //example of initialization of coins
-//   GoldDoubloon<ID_LENGTH>({ 0xED, 0xBC, 0xDF, 0x43, 0x32, 0x58, 0xAC, 0xFE, 0xDA, 0x9A, 0xC8, 0xCD, 0xFF }),
-//   HalfDoubloon<ID_LENGTH>({ 0xED, 0xCD, 0xDF, 0x43, 0x32, 0x45, 0xAC, 0xFE, 0x23, 0x9A, 0xC8, 0x45, 0xFF })
+char uid[ID_LENGTH * MAX_READABLE];
 
-// };
 
-//Known IDs for the pouches and their represented weights. 
-const Pouch<ID_LENGTH> sPouches[2] = {
-  Pouch<ID_LENGTH>(3.0, { 0xED, 0xBC, 0xDF, 0x43, 0x32, 0x58, 0xAC, 0xFE, 0xDA, 0x9A, 0xC8, 0xCD, 0xFF }),
-  Pouch<ID_LENGTH>(4.5, { 0xED, 0xCD, 0xDF, 0x43, 0x32, 0x45, 0xAC, 0xFE, 0x23, 0x9A, 0xC8, 0x45, 0xFF })
+// WiFi credentials
+const char* WIFI_SSID = "AKUMA";
+const char* WIFI_PASS = "Thehulk5626!";
+
+// MQTT broker
+const char* MQTT_SERVER = "broker.emqx.io";
+const int MQTT_PORT = 1883;
+
+/*
+   const char* WIFI_SSID = "AlchemyGuest";
+   const char* WIFI_PASS = "VoodooVacation5601";
+
+// MQTT broker
+const char* MQTT_SERVER = "10.1.10.115";
+const int MQTT_PORT = 1883;
+*/
+
+bool puzzleSolved = false;
+
+String incoming = "";
+
+
+const unsigned long heartBeatPulse = 4 * 1000UL;
+
+unsigned long lastTime = 0;
+
+
+//Known IDs for the pouches and their represented weights.
+const Pouch<ID_LENGTH> sPouches[NUM_OF_SPICE_POUCHES] = {
+  Pouch<ID_LENGTH>("Yeast",3.0, { 0x8, 0xC1, 0x27, 0xFB}),
+  Pouch<ID_LENGTH>("SugarCane",4.5, { 0x8, 0x60, 0x74, 0x15}),
+  Pouch<ID_LENGTH>("Vanilla",4.5, { 0x8, 0x94, 0xD3, 0xC9}),
+  Pouch<ID_LENGTH>("Molasses",4.5, { 0x8, 0x80, 0x1E, 0x7C}),
+  Pouch<ID_LENGTH>("Cloves",4.5, { 0x8, 0xF0, 0x55, 0xD6}),
 };
 
-//Known IDs for the coins and their represented weights. 
-const Coin<ID_LENGTH> coins[2] = {
+//Known IDs for the coins and their represented weights.
+const Coin<ID_LENGTH> coins[NUM_OF_COINS] = {
   //example of initialization of coins
-  GoldDoubloon<ID_LENGTH>({ 0xED, 0xBC, 0xDF, 0x43, 0x32, 0x58, 0xAC, 0xFE, 0xDA, 0x9A, 0xC8, 0xCD, 0xFF }),
-  HalfDoubloon<ID_LENGTH>({ 0xED, 0xCD, 0xDF, 0x43, 0x32, 0x45, 0xAC, 0xFE, 0x23, 0x9A, 0xC8, 0x45, 0xFF })
-
+  GoldDoubloon<ID_LENGTH>({ 0x8, 0x80, 0xD5, 0xCF}),
+  GoldDoubloon<ID_LENGTH>({ 0x8, 0x31, 0x61, 0x86}),
+  HalfDoubloon<ID_LENGTH>({0x8,0x1B,0xF,0x39}),
+  HalfDoubloon<ID_LENGTH>({0x8,0x19,0xF0,0x4F}),
+  PieceOfEight<ID_LENGTH>({0x8,0x81,0xE8,0x50}),
+  PieceOfEight<ID_LENGTH>({0x8,0xF1,0x76,0xC3}),
+  QuarterDoubloon<ID_LENGTH>({0x8,0xE2,0x52,0xE3}),
+  QuarterDoubloon<ID_LENGTH>({0x8,0x62,0xC7,0x38})
 };
 
 //Objects to store the detected tag IDs based on their type.
 ScalePlates<NUM_OF_COINS> coinsPlate;
 ScalePlates<NUM_OF_SPICE_POUCHES> pouchesPlate;
 
+//=============================================================
+//                    NETWORK & MQTT
+//=============================================================
 
+//WIFI NETWORK
+void setupWiFi() {
+  delay(1000);
+  //Serial.println("*********** WIFI ***********");
+  //Serial.print("Connecting to SSID: ");
+  //Serial.println(WIFI_SSID);
 
-//*************************  FUNCTIONS *******************************
+  WiFi.begin(WIFI_SSID,WIFI_PASS);
+
+  while(WiFi.status() != WL_CONNECTED){
+    delay(100);
+    //Serial.print("-");
+  }
+  //Serial.println("\nConnected.");
+}
+
+//MQTT SERVER
+void connectMQTT() {
+  while (!mqttClient.connected()) {
+    //Serial.print("Connecting to MQTT...");
+
+    String clientId = PROP_NAME;
+    clientId += "_";
+    clientId += String(random(0xffff), HEX);
+
+    if (mqttClient.connect(clientId.c_str())) {
+      //Serial.println("connected!");
+
+      // Subscribe to command topic
+      mqttClient.subscribe(MQTT_TOPIC_COMMAND);
+
+      // Announce we're online
+      mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE");
+      mqttLogf("%s v%s online", PROP_NAME, VERSION);
+
+    } else {
+      //Serial.printf("failed (rc=%d), retrying in 5s\n", mqttClient.state());
+      delay(5000);
+    }
+  }
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  char topicBuf[128];
+  strncpy(topicBuf,topic,sizeof(topicBuf)-1);
+  topicBuf[sizeof(topicBuf)-1] = '\0';
+
+  char message[128];
+  if(length >= sizeof(message)){
+    length = sizeof(message) - 1;
+  }
+
+  memcpy(message,payload,length);
+  message[length] = '\0';
+
+  char * msg = message;
+  while(*msg == ' ' || *msg == '\r' || *msg == '\n')
+    msg++;
+  char * end = msg + strlen(msg) -1;
+  while(end > msg && (*end == ' ' || *end == 't' || *end == '\r' || *end == '\n')){
+    *end = '\0';
+    end--;
+  }
+
+  //Serial.printf("[MQTT] Received on %s: %s\n", topicBuf,msg);
+
+  if(strcmp(topicBuf,MQTT_TOPIC_COMMAND) != 0){
+    return;
+  }
+
+  if(strcmp(msg,"PING") == 0){
+    mqttClient.publish(MQTT_TOPIC_MESSAGE,"PONG");
+    //Serial.println("[MQTT] PING -> PONG");
+    return;
+  }
+  if(strcmp(msg,"STATUS") == 0){
+    mqttClient.publish(MQTT_TOPIC_MESSAGE,"READY");
+    //Serial.printf("[MQTT] STATUS -> %s\n",state);
+    return;
+  }
+  if(strcmp(msg,"RESET") == 0){
+    mqttClient.publish(MQTT_TOPIC_MESSAGE,"OK");
+    //Serial.println("[MQTT] RESET -> Rebooting...");
+    delay(100);
+    ESP.restart();
+    return;
+  }
+  if (strcmp(msg, "PUZZLE_RESET") == 0) {
+    puzzleSolved = false;
+    // Add your puzzle reset logic here
+    mqttClient.publish(MQTT_TOPIC_MESSAGE, "OK");
+    //Serial.println("[MQTT] PUZZLE_RESET -> OK");
+    return;
+  }
+  if (strcmp(msg, "SOLVE") == 0) {
+    puzzleSolved = true;
+    mqttClient.publish(MQTT_TOPIC_COMMAND,msg);
+    mqttClient.publish(MQTT_TOPIC_MESSAGE, "SOLVED");
+    return;
+  }
+
+  if (strcmp(msg, "HALTCOIN") == 0) {
+    mqttClient.publish(MQTT_TOPIC_MESSAGE, "Halting coins' plate rfid field.");
+    return;
+  }
+  if (strcmp(msg, "HALTSPICE") == 0) {
+    mqttClient.publish(MQTT_TOPIC_MESSAGE, "Halting spices' plate rfid field.");
+    return;
+  }
+  if (strcmp(msg, "REBOOTCOIN") == 0) {
+    mqttClient.publish(MQTT_TOPIC_MESSAGE, "Rebooting coins' plate rfid.");
+    delay(1000); //needs minimum 1 second boot time
+    return;
+  }
+  if (strcmp(msg, "REBOOTSPICE") == 0) {
+    mqttClient.publish(MQTT_TOPIC_MESSAGE, "Rebooting spices' plate rfid.");
+    delay(1000); //needs minimum 1 second boot time
+    return;
+  }
+  //Serial.printf("[MQTT] Unknown command: %s\n", msg);
+}
+
+void setupMQTT() {
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.setBufferSize(512);  // Increase if needed
+}
+
+void heartBeat(){
+  unsigned long currentTime = millis();
+  if(!(currentTime - lastTime > heartBeatPulse))
+    return;
+  lastTime = currentTime;
+  // Announce we're online
+  mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE");
+  mqttLogf("%s v%s online", PROP_NAME, VERSION);
+}
+
+void mqttLogf(const char* format, ...) {
+  char buffer[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+
+  mqttClient.publish(MQTT_TOPIC_LOG, buffer);
+  //Serial.println(buffer);
+}
+
+//=============================================================
+//                  MAIN FUNCTIONS
+//=============================================================
 /**
- * @brief This function rotates the angle to 
- *        0 degrees. Representing Yay. 
+ * @brief This function rotates the angle to
+ *        0 degrees. Representing Yay.
  */
 void servoYay(){
   mServo.write(0);
 }
 /**
- * @brief This function rotates the angle to 
+ * @brief This function rotates the angle to
  *        90 degrees. Representing Nay.
  */
 void servoNay(){
@@ -234,89 +451,73 @@ void servoNay(){
 }
 
 /**
- * @brief This function rotates the angle to 
+ * @brief This function rotates the angle to
  *        45 degrees. Representing Nay.
  */
 void servoMid(){
   mServo.write(45);
 }
-/**
- * @brief This function checks to see if the reset 
- *        button has been pressed. 
- */
-void rst_bt(){
-  if(!digitalRead(RST_BT))
-    return; 
-  clearAllParameters();
 
-}
 /**
- * @brief This function checks to see if the reset 
- *        button has been pressed. 
- */
-void chk_bt(){
-  if(!digitalRead(CHK_BT))
-    return; 
-  checkSuccess();
-
-}
-/**
- * @brief This function resets all the scale's stored 
- *        data. 
+ * @brief This function resets all the scale's stored
+ *        data.
  */
 void clearAllParameters(){
   for(int i = 0; i < coinsPlate.index; i++)
     coinsPlate.clearStorage(i);
   for(int i = 0; i < pouchesPlate.index; i++)
     pouchesPlate.clearStorage(i);
-  
+
   coinsPlate.plateWeight = 0.0;
   pouchesPlate.plateWeight = 0.0;
 
   coinsPlate.index = 0;
   pouchesPlate.index = 0;
 }
+
 /**
- * @brief This function checks if the user has success 
- *        balanced the weight with the items. 
+ * @brief This function checks if the user has success
+ *        balanced the weight with the items.
  */
 void checkSuccess(){
 
 
 }
+
 /**
  * @brief Verify if the array of chars are a match.
  *
- * This function verifies if the passed in IDs are 
+ * This function verifies if the passed in IDs are
  * identical.
  *
  * @param id1 An array of char representing the RFID(ID).
  * @param id2 An array of char representing the RFID(ID).
  * @return A boolean value, whether both IDs are identical.
  */
-bool isAMatchingID(char id1[], char id2[]) {
+bool isAMatchingID(const char id1[], const char id2[]) {
   for (int i = 0; i < ID_LENGTH; i++)
     if (id1[i] != id2[i])
       return false;
   return true;
 }
+
 /**
  * @brief Validates an ID is a known ID.
  *
- * This function validates the passed in "id", by 
- * finding a match in one of the structures with 
+ * This function validates the passed in "id", by
+ * finding a match in one of the structures with
  * the known IDs.
  *
  * @tparam N The maximum number of IDs that is stored
  *           in the IDStorage structure.
  * @param id An array of char representing the RFID(ID).
- * @param storage An object that holds the known RFID 
- *                IDs. 
+ * @param storage An object that holds the known RFID
+ *                IDs.
  * @return A boolean value, whether the "id" is a
  *           matched to any of the known IDs.
  */
 template<byte N>
-bool idValidation(char id[], const IDStorage<N> & storage){
+bool idValidation(const char id[], const IDStorage<N> & storage){
   return (isAMatchingID(id,storage.id)) ? true : false;
 }
 /**
@@ -329,10 +530,10 @@ bool idValidation(char id[], const IDStorage<N> & storage){
  * @param id An array of char representing the RFID(ID).
  * @param isPlateForPouches A boolean value representing
  *           which plate on the scale is to be used.
- * @return A boolean value, whether the "id" is a valid 
- *           /known ID. 
+ * @return A boolean value, whether the "id" is a valid
+ *           /known ID.
  */
-bool isAValidID(char id[], bool isPlateForPouches) {
+bool isAValidID(const char id[], bool isPlateForPouches) {
   if(isPlateForPouches){
     for(int i = 0; i < NUM_OF_SPICE_POUCHES; i++)
       if(idValidation(id,sPouches[i]))
@@ -357,11 +558,11 @@ bool isAValidID(char id[], bool isPlateForPouches) {
  * @param plateStorage An object that was created to store
  *           the detected IDs. It will be used to verify
  *           passed in "id".
- * @return A boolean value, whether the "id" is in the 
+ * @return A boolean value, whether the "id" is in the
  *           plate object.
  */
 template<byte N>
-bool storageVerification(char id[], const ScalePlates<N> & plateStorage){
+bool storageVerification(const char id[], const ScalePlates<N> & plateStorage){
   for(int i = 0; plateStorage.index; i++)
     if(isAMatchingID(id,plateStorage.storage[i].id))
       return true;
@@ -379,7 +580,7 @@ bool storageVerification(char id[], const ScalePlates<N> & plateStorage){
  * @return A boolean value, whether "id" was already
  *           stored.
  */
-bool isAlreadyStored(char id[], bool isPlateForPouches) {
+bool isAlreadyStored(const char id[], bool isPlateForPouches) {
   if(isPlateForPouches)
     storageVerification(id,pouchesPlate);
   else
@@ -394,19 +595,102 @@ bool isAlreadyStored(char id[], bool isPlateForPouches) {
  *
  * @tparam N The maximum number of IDs the plate can store.
  * @param id An array of char representing the RFID(ID).
- * @param plateStorage The structure created to store the
- *           detected IDs. It will be used to searched for
- *           passed in "id".
+ * @param isPlateForPouches
  * @return Location/index of the "id" in the plate's storage.
  *           Returns -1, if "id" wasn't found.
  */
 template<byte N>
-int findID(char id[], const ScalePlates<N> & plateStorage){
-  for(int i = 0; i < plateStorage.index; i++)
-    if(isAMatchingID(id,plateStorage.storage[i].id))
-      return i;
+int findID(char id[],bool isPlateForPouches){
+  if(isPlateForPouches){
+    for(int i = 0; i < NUM_OF_SPICE_POUCHES; i++)
+      if(isAMatchingID(id,sPouches[i].id))
+        return i;
+  }
+  else
+  {
+
+    for(int i = 0; i < NUM_OF_COINS; i++)
+      if(isAMatchingID(id,coins[i].id))
+        return i;
+  }
   return -1;
 }
+
+void storeUID(chad id[], bool isPlateForPouches){
+
+}
+//=============================================================
+//            RFID FUNCTIONS
+//=============================================================
+void sendCommand(Stream& serial,char* cmd, int len) {
+  serial.write(cmd, len);
+}
+
+void haltReader(Stream& serial) {
+  sendCommand(serial,CMD_HALT, sizeof(CMD_HALT));
+}
+
+void rebootReader(Stream& serial) {
+  sendCommand(serial,CMD_REBOOT, sizeof(CMD_REBOOT));
+}
+
+int readResponse(Stream& serial, char* buffer, int maxLen, int timeout = 200) {
+  int index = 0;
+  unsigned long start = millis();
+  while ((millis() - start) < timeout) {
+    while (serial.available()) {
+      if (index < maxLen) {
+        buffer[index++] = serial.read();
+      }
+    }
+  }
+  return index;
+}
+
+int getTagCount(Stream& serial) {
+  char response[32];
+
+  sendCommand(serial,CMD_GET_TAG_COUNT, sizeof(CMD_GET_TAG_COUNT));
+  delay(50);
+  int len = readResponse(serial,response, sizeof(response));
+
+  if (len < 8)
+    return -1;
+  int count = response[7];  // 8th byte
+  if (count > 0)
+    //Serial.println("Found tag(s).");
+    return count;
+}
+
+bool getUID(Stream& serial,char * cmd, char* uid) {
+  char response[32];
+
+  sendCommand(serial,cmd, sizeof(cmd));
+  delay(50);
+  int len = readResponse(serial,response, sizeof(response));
+
+  if (len < 13) return false;
+
+  // UID = bytes 8–11 (0-based index)
+  for (int i = 0; i < 4; i++)
+    uid[i] = response[8 + i];
+
+  return true;
+}
+
+void printUID(char* uid) {
+  for (int i = 0; i < 4; i++) {
+    if (uid[i] < 0x10)
+      Serial.print("0");
+    Serial.print(uid[i], HEX);
+  }
+  Serial.println();
+}
+
+void printToMQTT(){
+
+}
+
 /**
  * @brief Retrieves the data from RFID reader.
  *
@@ -419,29 +703,69 @@ int findID(char id[], const ScalePlates<N> & plateStorage){
  * @param isPlateForPouches A boolean value representing
  *           which plate on the scale is to be used.
  */
-void listen(const SoftwareSerial& rSerial, bool isPlateForPouches) {
-  int rByte;  //capture bytes
-  int i = 0;  //scope counter
+void listen(Stream& serial, bool isPlateForPouches) {
+  int count = getTagCount(serial);
+  delay(100);
 
-  bool tag = (rSerial.available() == TAG_LENGTH) ? true : false;  //Ensures the entire tag data is serial buffer.
-
-  //If there isn't a tag is detected, leave
-  if (!tag)
+  //if number of tags found is less than 1 (or equal to 0), leave
+  if(count < 1)
     return;
 
-  while (rSerial.available()) {
-    rByte = rSerial.read();
-    //Skip the first byte and the last 3, ASCII 2 (STX), ASCII 13 (CR), ASCII 10 (LF), & ASCII 3 (ETX)
-    if (rByte != 2 && rByte != 13 && rByte != 10 && rByte != 3)
-      newTag[i++] = rByte;
+  //create a temp copy of the get UID command.
+  char temp[9];
+  for(int i = 0; i < 9; i++)
+    temp[i] = CMD_GET_UID[i];
+
+  for(int i = 0; i < count; i++){
+    //get each UID of each tags detected
+    temp[6] = i;
+    if (getUID(serial,temp,&uid[i*ID_LENGTH])){
+
+      //check if it is a valid ID (it is known and on the correct scale)
+      if(isAValidID(&uid[i*ID_LENGTH],isPlateForPouches)){
+        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/message1")).c_str(),"is a valid UID.");
+        String uidTemp;
+        for(int j  = 0; j< 4; j++)
+          uidTemp = String(uid[(i*ID_LENGTH) + j], HEX);
+        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/UID")).c_str(), uidTemp.c_str());
+
+      } else {
+
+        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/message1")).c_str(),"is not a valid UID.");
+        String uidTemp;
+        for(int j  = 0; j< 4; j++)
+          uidTemp = String(uid[(i*ID_LENGTH) + j], HEX);
+        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/UID")).c_str(), uidTemp.c_str());
+
+      }
+
+      //check if it is already stored in the scale variable
+      if(isAlreadyStored(&uid[i*ID_LENGTH],isPlateForPouches)){
+        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/message2")).c_str(),"is already stored.");
+      } else {
+        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/message2")).c_str(),"is not already stored.");
+        //first, find the matching UID with its weight
+        //then store the new UID
+        int index = findID(,isPlateForPouches);
+
+      }
+    }
   }
 
-  if (!isAValidID(newTag, isPlateForPouches))
-    return;
-  if (isAlreadyStored(newTag, isPlateForPouches))
-    return;
-  //auto& storage = (isPlateForPouches) ? pouchesPlate : coinsPlate;
 }
+
+//=============================================================
+//            GENERAL FUNCTIONS
+//=============================================================
+void _init(){
+  delay(5000);
+  //Serial setup
+  Serial1.begin(BAUD_RATE, SERIAL_8N1, RX1,TX1);
+  Serial2.begin(BAUD_RATE, SERIAL_8N1, RX2,TX2);
+  //Servo setup
+  mServo.attach(SERVO_PIN);
+}
+
 /**
  * @brief The main components of this program.
  *
@@ -449,24 +773,21 @@ void listen(const SoftwareSerial& rSerial, bool isPlateForPouches) {
  * program that will run in the main loop.
  */
 void program() {
-  listen(rSerial1 , true);
-  listen(rSerial2 , false);
-  rst_bt();
-  chk_bt();
+  listen(Serial1,true);
+  delay(100);
+  listen(Serial2,false);
+  delay(100);
 }
 
+//=============================================================
+//               MAIN SETUP
+//=============================================================
 void setup() {
-  //Serial setup
-  rSerial1.begin(9600);
-  rSerial2.begin(9600);
-  //Servo setup
-  mServo.attach(SERVO_PIN);
-  //GPIO setup
-  pinMode(RST_BT,INPUT);
-  pinMode(CHK_BT,INPUT);
-  digitalWrite(RST_BT,LOW);
-  digitalWrite(CHK_BT,LOW);
+  _init();
 }
+//=============================================================
+//                   LOOP
+//=============================================================
 void loop() {
   program();
 }
