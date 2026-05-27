@@ -75,10 +75,12 @@ struct IDStorage {
    * @param vWeight Weight value to be assign to RFID object.
    * @param vID An array of char.
    */
-  IDStorage(float vWeight, char vID[]):weight(vWeight) {
+  /*
+  IDStorage(float vWeight,const char vID[]):weight(vWeight) {
     for (int i = 0; i < ID_LENGTH; i++)
       id[i] = vID[i];
   }
+  */
 };
 
 //COINS
@@ -126,11 +128,9 @@ struct QuarterDoubloon : Coin<N> {
 //POUCH
 template<byte N>
 struct Pouch : IDStorage<N> {
-  const String spice;
-  Pouch(float vWeight, const char (&vID)[N])
-    : IDStorage<N>(vWeight, vID) {}
-  Pouch(const String & vSpice, float vWeight, const char (&vID)[N])
-    : spice(vSpice), IDStorage<N>(vWeight,vID){}
+ String spice;
+  Pouch(float vWeight, const char (&vID)[N]):IDStorage<N>(vWeight, vID) {}
+  Pouch(const String & vSpice, float vWeight, const char (&vID)[N]):spice(vSpice),IDStorage<N>(vWeight, vID){}
 };
 
 //PLATES
@@ -153,7 +153,7 @@ struct ScalePlates {
    * @param vWeight Weight value of the RFID object.
    * @param vID The ID of the RFID object.
    */
-  void addNewStorage(float vWeight, char vID){
+  void addNewStorage(float vWeight,const char (&vID)[ID_LENGTH]){
     if((index + 1) > N)
       return;
     storage[index] = IDStorage<ID_LENGTH>(vWeight,vID);
@@ -248,18 +248,25 @@ bool puzzleSolved = false;
 String incoming = "";
 
 
-const unsigned long heartBeatPulse = 4 * 1000UL;
+const unsigned long heartBeatPulse = 5 * 1000UL;
 
 unsigned long lastTime = 0;
 
 
 //Known IDs for the pouches and their represented weights.
 const Pouch<ID_LENGTH> sPouches[NUM_OF_SPICE_POUCHES] = {
-  Pouch<ID_LENGTH>("Yeast",3.0, { 0x8, 0xC1, 0x27, 0xFB}),
-  Pouch<ID_LENGTH>("SugarCane",4.5, { 0x8, 0x60, 0x74, 0x15}),
-  Pouch<ID_LENGTH>("Vanilla",4.5, { 0x8, 0x94, 0xD3, 0xC9}),
-  Pouch<ID_LENGTH>("Molasses",4.5, { 0x8, 0x80, 0x1E, 0x7C}),
-  Pouch<ID_LENGTH>("Cloves",4.5, { 0x8, 0xF0, 0x55, 0xD6}),
+
+//  Pouch<ID_LENGTH>(3.0f, (const char []){ 0x8, 0xC1, 0x27, 0xFB}),
+//  Pouch<ID_LENGTH>(4.5f, (const char []){ 0x8, 0x60, 0x74, 0x15}),
+//  Pouch<ID_LENGTH>(4.5f, (const char []){ 0x8, 0x94, 0xD3, 0xC9}),
+//  Pouch<ID_LENGTH>(4.5f, (const char []){ 0x8, 0x80, 0x1E, 0x7C}),
+//  Pouch<ID_LENGTH>(4.5f, (const char []){ 0x8, 0xF0, 0x55, 0xD6})
+
+  Pouch<ID_LENGTH>("Yeast",3.0f, (char []){ 0x8, 0xC1, 0x27, 0xFB}),
+  Pouch<ID_LENGTH>("SugarCane",4.5f,  (char []){ 0x8, 0x60, 0x74, 0x15}),
+  Pouch<ID_LENGTH>("Vanilla",4.5f,  (char []){ 0x8, 0x94, 0xD3, 0xC9}),
+  Pouch<ID_LENGTH>("Molasses",4.5f,  (char []){ 0x8, 0x80, 0x1E, 0x7C}),
+  Pouch<ID_LENGTH>("Cloves",4.5f,  (char []){ 0x8, 0xF0, 0x55, 0xD6})
 };
 
 //Known IDs for the coins and their represented weights.
@@ -599,7 +606,6 @@ bool isAlreadyStored(const char id[], bool isPlateForPouches) {
  * @return Location/index of the "id" in the plate's storage.
  *           Returns -1, if "id" wasn't found.
  */
-template<byte N>
 int findID(char id[],bool isPlateForPouches){
   if(isPlateForPouches){
     for(int i = 0; i < NUM_OF_SPICE_POUCHES; i++)
@@ -616,8 +622,14 @@ int findID(char id[],bool isPlateForPouches){
   return -1;
 }
 
-void storeUID(chad id[], bool isPlateForPouches){
-
+void storeUID(int index, bool isPlateForPouches){
+  if(isPlateForPouches){
+    pouchesPlate.addNewStorage(sPouches[index].weight,sPouches[index].id);
+  }
+  else 
+  {
+    coinsPlate.addNewStorage(coins[index].weight,coins[index].id);
+  }
 }
 //=============================================================
 //            RFID FUNCTIONS
@@ -736,17 +748,20 @@ void listen(Stream& serial, bool isPlateForPouches) {
         for(int j  = 0; j< 4; j++)
           uidTemp = String(uid[(i*ID_LENGTH) + j], HEX);
         mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/UID")).c_str(), uidTemp.c_str());
-
+        return;
       }
 
       //check if it is already stored in the scale variable
       if(isAlreadyStored(&uid[i*ID_LENGTH],isPlateForPouches)){
         mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/message2")).c_str(),"is already stored.");
+        return;
       } else {
         mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + String("/message2")).c_str(),"is not already stored.");
         //first, find the matching UID with its weight
         //then store the new UID
-        int index = findID(,isPlateForPouches);
+        int index = findID(&uid[i*ID_LENGTH],isPlateForPouches);
+        
+        //storeUID(index,isPlateForPouches);
 
       }
     }
