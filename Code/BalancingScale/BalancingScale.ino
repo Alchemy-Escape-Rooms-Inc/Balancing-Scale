@@ -210,18 +210,19 @@ struct ScalePlates {
   void printStorage(){
     if(index <= 0)
       return;
-    for(int i = 0; i < index; i++){
+    /*
+       for(int i = 0; i < index; i++){
 
-      String uid = "";
-      for(int j = 0; j < ID_LENGTH; j++)
-        uid += String(storage[i].id[j],HEX) + String((j == ID_LENGTH-1) ? "":"-");
+       String uid = "";
+       for(int j = 0; j < ID_LENGTH; j++)
+       uid += String(storage[i].id[j],HEX) + String((j == ID_LENGTH-1) ? "":"-");
 
-      mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/storedUID" + String(i)).c_str(),uid.c_str());
+       mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/storedUID" + String(i)).c_str(),uid.c_str());
 
-    }
-
-    mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/storedWeight").c_str(),String(plateWeight).c_str());
-    mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/storedIndex").c_str(),String(index).c_str());
+       }
+       */
+    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/storedWeight").c_str(),String(plateWeight).c_str());
+    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/storedIndex").c_str(),String(index).c_str());
   }
 };
 
@@ -247,18 +248,26 @@ HardwareSerial rfid2(2);
 
 
 
-
 byte uid[ID_LENGTH * MAX_READABLE];
 
 byte successCount = 0;
 
+// WiFi credentials
+const char* WIFI_SSID = "AKUMA";
+const char* WIFI_PASS = "Thehulk5626!";
 
-const char* WIFI_SSID = "AlchemyGuest";
-const char* WIFI_PASS = "VoodooVacation5601";
+// MQTT broker
+const char* MQTT_SERVER = "broker.emqx.io";
+const int MQTT_PORT = 1883;
+
+/*
+   const char* WIFI_SSID = "AlchemyGuest";
+   const char* WIFI_PASS = "VoodooVacation5601";
 
 // MQTT broker
 const char* MQTT_SERVER = "10.1.10.115";
 const int MQTT_PORT = 1883;
+*/
 
 bool puzzleSolved = false;
 
@@ -435,7 +444,7 @@ void heartBeat(){
     return;
   lastTime = currentTime;
   // Announce we're online
-  mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE");
+  mqttClient.publish(MQTT_TOPIC_STATUS,(puzzleSolved)? "SOLVED" : "ONLINE");
   mqttLogf("%s v%s online", PROP_NAME, VERSION);
 }
 
@@ -598,7 +607,7 @@ bool isAValidID(const byte id[], bool isPlateForPouches) {
  */
 template<byte N>
 bool storageVerification(const byte id[], const ScalePlates<N> & plateStorage){
-  for(int i = 0; plateStorage.index; i++)
+  for(int i = 0; i < plateStorage.index; i++)
     if(isAMatchingID(id,plateStorage.storage[i].id))
       return true;
   return false;
@@ -651,25 +660,30 @@ int findID(byte id[],bool isPlateForPouches){
 
 void storeUID(int index, bool isPlateForPouches){
   if(isPlateForPouches){
-    mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/pouchesStorage").c_str(),"Adding to storage.");
+    // mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/pouchesStorage").c_str(),"Adding to storage.");
     pouchesPlate.addNewStorage(sPouches[index].weight,sPouches[index].id);
   }
   else
   {
-    mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/coinsStorage").c_str(),"Adding to storage.");
+    // mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/coinsStorage").c_str(),"Adding to storage.");
     coinsPlate.addNewStorage(coins[index].weight,coins[index].id);
   }
 }
 
 
 void checkForRemoval(int tagCount,bool isPlateForPouches){
+
+  mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/tagCount").c_str(),String(tagCount).c_str());
+
+
   //check to see if the same tag count matches the IDs stored on the plates
-  if(isPlateForPouches)
+  if(isPlateForPouches){
     if(tagCount >= pouchesPlate.index)
       return;
-    else
-      if(tagCount >= coinsPlate.index)
-        return;
+  } else{
+    if(tagCount >= coinsPlate.index)
+      return;
+  }
 
 
   //if the count is less than what is stored in the plates,
@@ -820,14 +834,15 @@ void printToMQTT(){
 }
 
 void printCapturedUIDs(int count){
-  String topic = String(MQTT_TOPIC_SYSTEM);
+
   for(int i = 0; i < count; i++){
-    topic += "/UID" + String(i);
+
     String id = "";
     for(int j = 0; j < ID_LENGTH; j++){
-      id += "0x" + String(uid[(i*ID_LENGTH)+j],HEX) + "-";
+      id += "0x" + String(uid[(i*ID_LENGTH)+j],HEX) + ((j == ID_LENGTH-1)?"":"-");
     }
-    mqttClient.publish(topic.c_str(),id.c_str());
+
+    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/UID" + String(i)).c_str(),id.c_str());
   }
 
 }
@@ -847,20 +862,23 @@ void listen(Stream& serial, bool isPlateForPouches) {
   int count = getTagCount(serial);
   delay(10);
 
-  //if number of tags found is less than 1 (or equal to 0), leave
-  if(count < 1)
-    return;
-
   for(int i = 0; i < count; i++){
     //get each UID of each tags detected
     if (getUID(serial,CMD_GET_UID[i],&uid[i*ID_LENGTH])){
+      //print uid as you receive them
+      /*
+         String tID = "";
+         for(int j=0; j < ID_LENGTH; j++)
+         tID += String(uid[(i*ID_LENGTH) +j],HEX) + ((j == ID_LENGTH-1)?"":"-");
+         mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/UID"+ String(i)).c_str(),tID.c_str());
+         */
       //-------------------------------------------------------
       //check if it is a valid ID (it is known and on the correct scale)
       if(isAValidID(&uid[i*ID_LENGTH],isPlateForPouches)){
-        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/valid"+ String(i)).c_str(),"is a valid UID.");
+        // mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/valid"+ String(i)).c_str(),"is a valid UID.");
       } else {
 
-        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/valid"+ String(i)).c_str(),"is not a valid UID.");
+        // mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/valid"+ String(i)).c_str(),"is not a valid UID.");
         continue;
       }
       //-------------------------------------------------------
@@ -868,24 +886,25 @@ void listen(Stream& serial, bool isPlateForPouches) {
 
       //check if it is already stored in the scales storage
       if(isAlreadyStored(&uid[i*ID_LENGTH],isPlateForPouches)){
-        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/stored" +  String(i)).c_str(),"is already stored.");
+        //mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/stored" +  String(i)).c_str(),"is already stored.");
       } else {
-        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/stored"+ String(i)).c_str(),"is not already stored.");
+        //mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/stored"+ String(i)).c_str(),"is not already stored.");
         //first, find the matching UID with its weight
         //then store the new UID
         int index = findID(&uid[i*ID_LENGTH],isPlateForPouches);
+        //mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/foundIndex" + String(i)).c_str(),String(index).c_str());
         storeUID(index,isPlateForPouches);
 
       }
     }
   }
   //print captured UIDs
-  // printCapturedUIDs(count);
+  //printCapturedUIDs(count);
   //check if any tags was removed
   checkForRemoval(count,isPlateForPouches);
 
   //print current tags on scales
-  printToMQTT();
+  //printToMQTT();
 
   //clear uid array
   clearUID();
@@ -934,7 +953,8 @@ void program() {
 
   heartBeat();
 
-
+  if(puzzleSolved)
+    return;
   //polling pouches plate
   scanPouchesPlate();
   //polling coins plate
