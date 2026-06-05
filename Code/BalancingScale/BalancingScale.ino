@@ -208,8 +208,9 @@ struct ScalePlates {
 
 
   void printStorage(){
-    if(index <= 0)
-      return;
+    
+    //if(index <= 0)
+    //  return;
     /*
        for(int i = 0; i < index; i++){
 
@@ -701,11 +702,11 @@ void checkForRemoval(int tagCount,bool isPlateForPouches){
         else {
           count++;
         }
-        //remove unmatching ID from plate
-        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/pouchesStorage").c_str(),"Removing from storage.");
-        if(count >= tagCount)
-          pouchesPlate.removeStorage(i);
       }
+      //remove unmatching ID from plate
+      mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/pouchesStorage").c_str(),"Removing from storage.");
+      if(count >= tagCount)
+        pouchesPlate.removeStorage(i);
     }
   }
   else{
@@ -719,11 +720,11 @@ void checkForRemoval(int tagCount,bool isPlateForPouches){
         else {
           count++;
         }
-        //remove unmatching ID from plate
-        mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/coinsStorage").c_str(),"Removing from storage.");
-        if(count >= tagCount)
-          coinsPlate.removeStorage(i);
       }
+      //remove unmatching ID from plate
+      mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/coinsStorage").c_str(),"Removing from storage.");
+      if(count >= tagCount)
+        coinsPlate.removeStorage(i);
     }
   }
 }
