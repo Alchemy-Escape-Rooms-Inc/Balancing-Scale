@@ -208,7 +208,7 @@ struct ScalePlates {
 
 
   void printStorage(){
-    
+
     //if(index <= 0)
     //  return;
     /*
@@ -251,34 +251,29 @@ HardwareSerial rfid2(2);
 
 byte uid[ID_LENGTH * MAX_READABLE];
 
-byte successCount = 0;
 
-// WiFi credentials
-const char* WIFI_SSID = "AKUMA";
-const char* WIFI_PASS = "Thehulk5626!";
-
-// MQTT broker
-const char* MQTT_SERVER = "broker.emqx.io";
-const int MQTT_PORT = 1883;
-
-/*
-   const char* WIFI_SSID = "AlchemyGuest";
-   const char* WIFI_PASS = "VoodooVacation5601";
+const char* WIFI_SSID = "AlchemyGuest";
+const char* WIFI_PASS = "VoodooVacation5601";
 
 // MQTT broker
 const char* MQTT_SERVER = "10.1.10.115";
 const int MQTT_PORT = 1883;
-*/
+
+bool servoState = false;    //true = yay, false = nay
+
+float weights[5];     //array to hold the spices weight
+bool success[5] = {false,false,false,false,false}; //array for tracking the correct spice pouch solved
 
 bool puzzleSolved = false;
 
 String incoming = "";
 
 
-const unsigned long heartBeatPulse = 5 * 1000UL;
+const unsigned long heartBeatPulse = 5 * 1000UL;    //heart beat for MQTT, every 5 seconds
+const unsigned long scanPeriod = 1000UL;      //scanning of the RFIDs and other associated operations, every second
 
-unsigned long lastTime = 0;
-
+unsigned long hLastTime = 0;
+unsigned long sLastTime = 0;
 
 //Known IDs for the pouches and their represented weights.
 const Pouch<ID_LENGTH> sPouches[NUM_OF_SPICE_POUCHES] = {
@@ -287,7 +282,7 @@ const Pouch<ID_LENGTH> sPouches[NUM_OF_SPICE_POUCHES] = {
   Pouch<ID_LENGTH>("SugarCane",4.5f,  (byte []){ 0x8, 0x60, 0x74, 0x15}),
   Pouch<ID_LENGTH>("Vanilla",4.5f,  (byte []){ 0x8, 0x94, 0xD3, 0xC9}),
   Pouch<ID_LENGTH>("Molasses",4.5f,  (byte []){ 0x8, 0x80, 0x1E, 0x7C}),
-  Pouch<ID_LENGTH>("Cloves",4.5f,  (byte []){0xF0, 0x55, 0xD6,0x19})
+  Pouch<ID_LENGTH>("Cloves",1.5f,  (byte []){0xF0, 0x55, 0xD6,0x19})
 };
 
 //Known IDs for the coins and their represented weights.
@@ -441,9 +436,9 @@ void setupMQTT() {
 
 void heartBeat(){
   unsigned long currentTime = millis();
-  if(!(currentTime - lastTime > heartBeatPulse))
+  if(!(currentTime - hLastTime > heartBeatPulse))
     return;
-  lastTime = currentTime;
+  hLastTime = currentTime;
   // Announce we're online
   mqttClient.publish(MQTT_TOPIC_STATUS,(puzzleSolved)? "SOLVED" : "ONLINE");
   mqttLogf("%s v%s online", PROP_NAME, VERSION);
@@ -471,7 +466,7 @@ void mqttLogf(const char* format, ...) {
  *        0 degrees. Representing Yay.
  */
 void servoYay(){
-  mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"yay");
+  mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/servo").c_str(),"yay");
   mServo.write(0);
 }
 /**
@@ -479,19 +474,40 @@ void servoYay(){
  *        90 degrees. Representing Nay.
  */
 void servoNay(){
-  mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"nay");
+  mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/servo").c_str(),"nay");
   mServo.write(90);
 }
 
-/**
- * @brief This function rotates the angle to
- *        45 degrees. Representing Nay.
- */
-void servoMid(){
-  mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"center");
-  mServo.write(45);
-}
 
+
+void updateServo(bool state){
+  if(state){
+    if(state == servoState){
+      return;
+    }
+    else{
+      servoYay();
+      servoState = state;
+    }
+
+  } else {
+
+    if(state == servoState){
+      return;
+    }
+    else{
+      servoNay();
+      servoState = state;
+    }
+  }
+
+}
+/*
+   void servoMid(){
+   mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"center");
+   mServo.write(45);
+   }
+   */
 /**
  * @brief This function resets all the scale's stored
  *        data.
@@ -514,18 +530,31 @@ void clearAllParameters(){
  *        balanced the weight with the items.
  */
 void checkSuccess(){
-  //when the weight of all 5 spices are
-  //found, the puzzle is solved
-  if(successCount >= 5){
-    puzzleSolved = true;
+  updateServo(false);
+  //if there is no known tag on either plate, leave
+  if(pouchesPlate.plateWeight == 0 || coinsPlate.plateWeight == 0)
     return;
-  }
-  if(pouchesPlate.plateWeight == coinsPlate.plateWeight){
-    servoYay();
-    successCount++;
-  } else {
-    servoNay();
-  }
+  //if the weights of the plate doesn't match, leave
+  if(pouchesPlate.plateWeight != coinsPlate.plateWeight)
+    return;
+
+  //weights match, update servo to yay
+  updateServo(true);
+
+  //get the matching weight and update the success tracking array
+  for(int i = 0; i < 5; i++)
+    if(weights[i] == pouchesPlate.plateWeight)
+      success[i] = true;
+
+  //count the successes
+  int count = 0;
+  for(int i = 0; i < 5; i++)
+    if(success[i])
+      count++;
+  //if success count is 5, the prop puzzle is solved, and finished
+  if(count >= 5)
+    puzzleSolved;
+
 
 }
 
@@ -673,10 +702,6 @@ void storeUID(int index, bool isPlateForPouches){
 
 
 void checkForRemoval(int tagCount,bool isPlateForPouches){
-
-  mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/tagCount").c_str(),String(tagCount).c_str());
-
-
   //check to see if the same tag count matches the IDs stored on the plates
   if(isPlateForPouches){
     if(tagCount >= pouchesPlate.index)
@@ -704,9 +729,14 @@ void checkForRemoval(int tagCount,bool isPlateForPouches){
         }
       }
       //remove unmatching ID from plate
-      mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/pouchesStorage").c_str(),"Removing from storage.");
+      // mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/pouchesStorage").c_str(),"Removing from storage.");
       if(count >= tagCount)
         pouchesPlate.removeStorage(i);
+
+
+      mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/Spice").c_str(),"");
+      if(pouchesPlate.plateWeight == 0)
+        mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/Spice/weight").c_str(),"");
     }
   }
   else{
@@ -722,9 +752,12 @@ void checkForRemoval(int tagCount,bool isPlateForPouches){
         }
       }
       //remove unmatching ID from plate
-      mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/coinsStorage").c_str(),"Removing from storage.");
+      //mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/coinsStorage").c_str(),"Removing from storage.");
       if(count >= tagCount)
         coinsPlate.removeStorage(i);
+
+      if(coinsPlate.plateWeight == 0)
+        mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/Coins/weight").c_str(),"");
     }
   }
 }
@@ -822,13 +855,11 @@ void printToMQTT(){
   if(pouchesPlate.index > 0){
 
     String topic = String(MQTT_TOPIC_SYSTEM) + "/Spice";
-    mqttClient.publish(String(topic + String("/detected")).c_str(), String(pouchesPlate.index).c_str());
     mqttClient.publish(String(topic + String("/weight")).c_str(), String(pouchesPlate.plateWeight).c_str());
   }
 
   if(coinsPlate.index > 0 ){
     String topic = String(MQTT_TOPIC_SYSTEM) + "/Coins";
-    mqttClient.publish(String(topic + String("/detected")).c_str(), String(coinsPlate.index).c_str());
     mqttClient.publish(String(topic + String("/weight")).c_str(), String(coinsPlate.plateWeight).c_str());
   }
 
@@ -893,20 +924,15 @@ void listen(Stream& serial, bool isPlateForPouches) {
         //first, find the matching UID with its weight
         //then store the new UID
         int index = findID(&uid[i*ID_LENGTH],isPlateForPouches);
-        //mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/foundIndex" + String(i)).c_str(),String(index).c_str());
         storeUID(index,isPlateForPouches);
+        if(isPlateForPouches)
+          mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/Spice").c_str(),sPouches[index].spice.c_str());
 
       }
     }
   }
-  //print captured UIDs
-  //printCapturedUIDs(count);
   //check if any tags was removed
   checkForRemoval(count,isPlateForPouches);
-
-  //print current tags on scales
-  //printToMQTT();
-
   //clear uid array
   clearUID();
   delay(250);
@@ -924,6 +950,11 @@ void scanCoinsPlate(){
 //=============================================================
 //            GENERAL FUNCTIONS
 //=============================================================
+void initParam(){
+  for(int i = 0; i < 5; i++ )
+    weights[i] = sPouches[i].weight;
+}
+
 void _init(){
   //Serial setup
   Serial.begin(BAUD_RATE);
@@ -935,9 +966,12 @@ void _init(){
   setupWiFi();
   //mqtt setup
   setupMQTT();
-  Serial.println("Finished Initializing..");
-  //Serial.begin(115200);
-  //Serial.println("Setting up.");
+  //initialize BalancingScale params
+  initParam();
+  //set servo to nay
+  updateServo(false);
+  //add delay for rfids to fully boot
+  delay(1000); //1 sec
 }
 
 /**
@@ -956,14 +990,22 @@ void program() {
 
   if(puzzleSolved)
     return;
+
+  unsigned long currentTime = millis();
+  if(!(currentTime - sLastTime >= scanPeriod))
+    return;
+
+  sLastTime = currentTime;
   //polling pouches plate
   scanPouchesPlate();
   //polling coins plate
   scanCoinsPlate();
+  //log to MQTT the scale status
+  printToMQTT();
 
-  pouchesPlate.printStorage();
-  coinsPlate.printStorage();
-  //checkSuccess();
+  checkSuccess();
+
+
 }
 
 //=============================================================
@@ -978,5 +1020,6 @@ void setup() {
 void loop() {
   program();
 }
+
 
 
