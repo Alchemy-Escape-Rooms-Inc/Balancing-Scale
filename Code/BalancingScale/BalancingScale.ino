@@ -8,7 +8,7 @@
 #include <HardwareSerial.h>
 #include <ESP32Servo.h>
 
-#define VERSION "1.0.0"
+#define VERSION "1.1.0"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -269,7 +269,7 @@ bool puzzleSolved = false;
 String incoming = "";
 
 
-const unsigned long heartBeatPulse = 5 * 1000UL;    //heart beat for MQTT, every 5 seconds
+const unsigned long heartBeatPulse = 300 * 1000UL;  //heart beat for MQTT, every 5 minutes (WatchTower standard)
 const unsigned long scanPeriod = 1000UL;      //scanning of the RFIDs and other associated operations, every second
 
 unsigned long hLastTime = 0;
@@ -331,14 +331,15 @@ void connectMQTT() {
     clientId += "_";
     clientId += String(random(0xffff), HEX);
 
-    if (mqttClient.connect(clientId.c_str())) {
+    // LWT: broker publishes retained OFFLINE on /status if we drop
+    if (mqttClient.connect(clientId.c_str(), MQTT_TOPIC_STATUS, 1, true, "OFFLINE")) {
       Serial.println("connected!");
 
       // Subscribe to command topic
       mqttClient.subscribe(MQTT_TOPIC_COMMAND);
 
       // Announce we're online
-      mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE");
+      mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
       mqttLogf("%s v%s online", PROP_NAME, VERSION);
 
     } else {
@@ -365,7 +366,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   while(*msg == ' ' || *msg == '\r' || *msg == '\n')
     msg++;
   char * end = msg + strlen(msg) -1;
-  while(end > msg && (*end == ' ' || *end == 't' || *end == '\r' || *end == '\n')){
+  while(end > msg && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')){
     *end = '\0';
     end--;
   }
@@ -376,56 +377,108 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
+  // Our own PONG/OK replies arrive back on /command (we subscribe to it).
+  // Ignore them silently so they don't register as unknown commands.
+  if(strcmp(msg,"PONG") == 0 || strcmp(msg,"OK") == 0 || strlen(msg) == 0){
+    return;
+  }
+
   if(strcmp(msg,"PING") == 0){
-    mqttClient.publish(MQTT_TOPIC_MESSAGE,"PONG");
-    //Serial.println("[MQTT] PING -> PONG");
+    // WatchTower standard: PONG on the topic the command arrived on
+    mqttClient.publish(MQTT_TOPIC_COMMAND,"PONG");
     return;
   }
   if(strcmp(msg,"STATUS") == 0){
-    mqttClient.publish(MQTT_TOPIC_MESSAGE,"READY");
-    //Serial.printf("[MQTT] STATUS -> %s\n",state);
+    publishDiagnostics();
     return;
   }
   if(strcmp(msg,"RESET") == 0){
-    mqttClient.publish(MQTT_TOPIC_MESSAGE,"OK");
-    //Serial.println("[MQTT] RESET -> Rebooting...");
-    delay(100);
+    // WatchTower standard: respond OK, then software reboot
+    mqttLogf("RESET: rebooting");
+    mqttClient.publish(MQTT_TOPIC_COMMAND,"OK");
+    mqttClient.loop();
+    delay(250);
     ESP.restart();
     return;
   }
   if (strcmp(msg, "PUZZLE_RESET") == 0) {
-    puzzleSolved = false;
-    // Add your puzzle reset logic here
-    mqttClient.publish(MQTT_TOPIC_MESSAGE, "OK");
-    //Serial.println("[MQTT] PUZZLE_RESET -> OK");
+    // Reset game state without rebooting
+    puzzleReset();
+    mqttClient.publish(MQTT_TOPIC_COMMAND, "OK");
     return;
   }
   if (strcmp(msg, "SOLVE") == 0) {
+    // GM override: mark the puzzle solved
     puzzleSolved = true;
-    mqttClient.publish(MQTT_TOPIC_COMMAND,msg);
-    mqttClient.publish(MQTT_TOPIC_MESSAGE, "SOLVED");
+    updateServo(true);
+    publishSolved();
     return;
   }
 
   if (strcmp(msg, "HALTCOIN") == 0) {
+    haltReader(rfid2);
     mqttClient.publish(MQTT_TOPIC_MESSAGE, "Halting coins' plate rfid field.");
     return;
   }
   if (strcmp(msg, "HALTSPICE") == 0) {
+    haltReader(rfid1);
     mqttClient.publish(MQTT_TOPIC_MESSAGE, "Halting spices' plate rfid field.");
     return;
   }
   if (strcmp(msg, "REBOOTCOIN") == 0) {
+    rebootReader(rfid2);
     mqttClient.publish(MQTT_TOPIC_MESSAGE, "Rebooting coins' plate rfid.");
     delay(1000); //needs minimum 1 second boot time
     return;
   }
   if (strcmp(msg, "REBOOTSPICE") == 0) {
+    rebootReader(rfid1);
     mqttClient.publish(MQTT_TOPIC_MESSAGE, "Rebooting spices' plate rfid.");
     delay(1000); //needs minimum 1 second boot time
     return;
   }
-  //Serial.printf("[MQTT] Unknown command: %s\n", msg);
+  mqttLogf("Unknown command: %s", msg);
+}
+
+/**
+ * @brief Publishes SOLVED on /status. M3's "Balancing Scale Solved" event
+ *        matches this exact payload and forwards MermaidsTale/ScaleSolved.
+ *        Not retained: a retained SOLVED would replay into fresh sessions.
+ */
+void publishSolved(){
+  mqttClient.publish(MQTT_TOPIC_STATUS, "SOLVED");
+  mqttLogf("PUZZLE SOLVED");
+}
+
+/**
+ * @brief Resets all game state without rebooting (PUZZLE_RESET).
+ */
+void puzzleReset(){
+  puzzleSolved = false;
+  for(int i = 0; i < 5; i++)
+    success[i] = false;
+  clearAllParameters();
+  updateServo(false);
+  mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
+  mqttLogf("PUZZLE_RESET complete");
+}
+
+/**
+ * @brief Publishes a full diagnostics string on /status (STATUS command).
+ */
+void publishDiagnostics(){
+  int count = 0;
+  for(int i = 0; i < 5; i++)
+    if(success[i])
+      count++;
+  char diag[192];
+  snprintf(diag, sizeof(diag),
+    "%s v%s | State=%s | Spice=%.2f | Coins=%.2f | Matched=%d/5 | IP=%s | RSSI=%d | UP%lus",
+    PROP_NAME, VERSION,
+    puzzleSolved ? "SOLVED" : "ONLINE",
+    pouchesPlate.plateWeight, coinsPlate.plateWeight, count,
+    WiFi.localIP().toString().c_str(), WiFi.RSSI(), millis() / 1000UL);
+  mqttClient.publish(MQTT_TOPIC_STATUS, diag);
 }
 
 void setupMQTT() {
@@ -439,9 +492,15 @@ void heartBeat(){
   if(!(currentTime - hLastTime > heartBeatPulse))
     return;
   hLastTime = currentTime;
-  // Announce we're online
-  mqttClient.publish(MQTT_TOPIC_STATUS,(puzzleSolved)? "SOLVED" : "ONLINE");
-  mqttLogf("%s v%s online", PROP_NAME, VERSION);
+  // WatchTower standard heartbeat format on /status
+  char hb[64];
+  snprintf(hb, sizeof(hb), "HEARTBEAT:%s:UP%lus:RSSI%d",
+           puzzleSolved ? "SOLVED" : "ONLINE", millis() / 1000UL, WiFi.RSSI());
+  mqttClient.publish(MQTT_TOPIC_STATUS, hb);
+  // While solved, re-assert the plain SOLVED payload M3 matches on, in case
+  // M3 restarted mid-game and missed the live solve event.
+  if(puzzleSolved)
+    mqttClient.publish(MQTT_TOPIC_STATUS, "SOLVED");
 }
 
 void mqttLogf(const char* format, ...) {
@@ -552,10 +611,10 @@ void checkSuccess(){
     if(success[i])
       count++;
   //if success count is 5, the prop puzzle is solved, and finished
-  if(count >= 5)
-    puzzleSolved;
-
-
+  if(count >= 5 && !puzzleSolved){
+    puzzleSolved = true;
+    publishSolved();
+  }
 }
 
 /**
@@ -817,9 +876,11 @@ int getTagCount(Stream& serial) {
   }
 
   int count = response[7];  // 8th byte
-  if (count > 0)
-    //Serial.println("Found tag(s).");
-    return count;
+  if (count < 0)
+    return 0;
+  if (count > MAX_READABLE)  // CMD_GET_UID only has MAX_READABLE entries
+    count = MAX_READABLE;
+  return count;
 }
 
 bool getUID(Stream& serial,byte * cmd, byte* uid) {
@@ -893,6 +954,12 @@ void printCapturedUIDs(int count){
 void listen(Stream& serial, bool isPlateForPouches) {
   int count = getTagCount(serial);
   delay(10);
+
+  //bad frame / no response: don't treat it as "all tags removed"
+  if(count < 0){
+    clearUID();
+    return;
+  }
 
   for(int i = 0; i < count; i++){
     //get each UID of each tags detected
