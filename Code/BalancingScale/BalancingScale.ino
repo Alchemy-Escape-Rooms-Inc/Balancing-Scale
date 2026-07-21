@@ -13,6 +13,7 @@
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
 
+#define MQTT_TOPIC          "MermaidsTale/BalancingScale"
 #define MQTT_TOPIC_COMMAND  "MermaidsTale/BalancingScale/command"
 #define MQTT_TOPIC_STATUS   "MermaidsTale/BalancingScale/status"
 #define MQTT_TOPIC_LOG      "MermaidsTale/BalancingScale/log"
@@ -22,14 +23,14 @@
 
 #define NUM_OF_SPICE_POUCHES 5
 #define NUM_OF_COINS 8
-#define SERVO_PIN 35
+#define SERVO_PIN 13
 
 #define RX1 18
 #define TX1 19
 
 #define RX2 16
 #define TX2 17
-#define BAUD_RATE 9600
+#define BAUD_RATE 115200
 #define ID_LENGTH 4
 #define MAX_READABLE 5                //RFIDs can only read 5 tags at once.
 
@@ -278,11 +279,11 @@ unsigned long sLastTime = 0;
 //Known IDs for the pouches and their represented weights.
 const Pouch<ID_LENGTH> sPouches[NUM_OF_SPICE_POUCHES] = {
 
-  Pouch<ID_LENGTH>("Yeast",3.0f, (byte []){0xC1, 0x27, 0xFB,0x19}),
-  Pouch<ID_LENGTH>("SugarCane",4.5f,  (byte []){0x60, 0x74, 0x15,0x21}),
-  Pouch<ID_LENGTH>("Vanilla",4.5f,  (byte []){0x94, 0xD3, 0xC9,0x1}),
-  Pouch<ID_LENGTH>("Molasses",4.5f,  (byte []){0x80, 0x1E, 0x7C,0x21}),
-  Pouch<ID_LENGTH>("Cloves",1.5f,  (byte []){0xF0, 0x55, 0xD6,0x19})
+  Pouch<ID_LENGTH>("Yeast",2.5f, (byte []){0xC1, 0x27, 0xFB,0x19}),
+  Pouch<ID_LENGTH>("SugarCane",2.25f,  (byte []){0x60, 0x74, 0x15,0x21}),
+  Pouch<ID_LENGTH>("Vanilla",1.75f,  (byte []){0x94, 0xD3, 0xC9,0x1}),
+  Pouch<ID_LENGTH>("Molasses",2.75f,  (byte []){0x80, 0x1E, 0x7C,0x21}),
+  Pouch<ID_LENGTH>("Cloves",1.5f,  (byte []){0x71, 0xD, 0xEB,0x17})
 };
 
 //Known IDs for the coins and their represented weights.
@@ -461,13 +462,19 @@ void mqttLogf(const char* format, ...) {
 //=============================================================
 //                  MISC FUNCTIONS
 //=============================================================
+
+void setupServo(){
+  mServo.setPeriodHertz(100);
+  mServo.attach(SERVO_PIN, 500, 2400); 
+}
+
 /**
  * @brief This function rotates the angle to
  *        0 degrees. Representing Yay.
  */
 void servoYay(){
   mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/servo").c_str(),"yay");
-  mServo.write(0);
+  mServo.write(155);
 }
 /**
  * @brief This function rotates the angle to
@@ -475,7 +482,7 @@ void servoYay(){
  */
 void servoNay(){
   mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/servo").c_str(),"nay");
-  mServo.write(90);
+  mServo.write(30);
 }
 
 
@@ -500,14 +507,12 @@ void updateServo(bool state){
       servoState = state;
     }
   }
-
+ mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/ServoState").c_str(),(state) ? "true":"false");
 }
-/*
-   void servoMid(){
+void servoMid(){
    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"center");
-   mServo.write(45);
-   }
-   */
+   mServo.write(70);
+}
 /**
  * @brief This function resets all the scale's stored
  *        data.
@@ -542,18 +547,23 @@ void checkSuccess(){
   updateServo(true);
 
   //get the matching weight and update the success tracking array
-  for(int i = 0; i < 5; i++)
-    if(weights[i] == pouchesPlate.plateWeight)
+  for(int i = 0; i < 5; i++){
+    if(weights[i] == pouchesPlate.plateWeight){
       success[i] = true;
+      printSuccessToMQTT(i);
+    }
+  }
 
   //count the successes
   int count = 0;
   for(int i = 0; i < 5; i++)
     if(success[i])
       count++;
+  
+  mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/SuccessCount").c_str(),String(count).c_str());
   //if success count is 5, the prop puzzle is solved, and finished
   if(count >= 5)
-    puzzleSolved;
+    puzzleSolved = true;
 
 
 }
@@ -878,6 +888,28 @@ void printCapturedUIDs(int count){
   }
 
 }
+
+
+void printSuccessToMQTT(int successIndex){
+  switch(successIndex){
+    case 0: 
+      mqttClient.publish(String(String(MQTT_TOPIC) + "/Yeast").c_str(),"true");
+      break;
+    case 1: 
+      mqttClient.publish(String(String(MQTT_TOPIC) + "/SugarCane").c_str(),"true");
+      break;
+    case 2: 
+      mqttClient.publish(String(String(MQTT_TOPIC) + "/Vanilla").c_str(),"true");
+      break;
+    case 3: 
+      mqttClient.publish(String(String(MQTT_TOPIC) + "/Molasses").c_str(),"true");
+      break;
+    case 4: 
+      mqttClient.publish(String(String(MQTT_TOPIC) + "/Cloves").c_str(),"true");
+      break;
+  }
+}
+
 /**
  * @brief Retrieves the data from RFID reader.
  *
@@ -961,15 +993,15 @@ void _init(){
   rfid1.begin(BAUD_RATE, SERIAL_8N1, RX1,TX1);
   rfid2.begin(BAUD_RATE, SERIAL_8N1, RX2,TX2);
   //Servo setup
-  mServo.attach(SERVO_PIN);
+  setupServo();
   //network setup
   setupWiFi();
   //mqtt setup
   setupMQTT();
   //initialize BalancingScale params
   initParam();
-  //set servo to nay
-  updateServo(false);
+  //set servo to center
+  servoMid();
   //add delay for rfids to fully boot
   delay(1000); //1 sec
 }
@@ -1004,8 +1036,6 @@ void program() {
   printToMQTT();
 
   checkSuccess();
-
-
 }
 
 //=============================================================
