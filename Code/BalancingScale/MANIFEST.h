@@ -5,7 +5,7 @@
 // ============================================================
 
 #define DEVICE_NAME           "BalancingScale"
-#define FIRMWARE_VERSION      "1.1.0"
+#define FIRMWARE_VERSION      "1.2.0"
 #define BOARD_TYPE            "ESP32 (variant unverified)"
 #define ROOM                  "MermaidsTale"
 #define DESCRIPTION           "RFID pendulum scale: two multi-tag RFID readers (spice pouches vs coins plates) match represented weights; servo indicates balance; publishes SOLVED on /status when all 5 pouch weights have been matched (M3 forwards as MermaidsTale/ScaleSolved)"

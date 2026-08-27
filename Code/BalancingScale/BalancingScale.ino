@@ -8,7 +8,7 @@
 #include <HardwareSerial.h>
 #include <ESP32Servo.h>
 
-#define VERSION "1.1.0"
+#define VERSION "1.2.0"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -589,13 +589,14 @@ void clearAllParameters(){
  *        balanced the weight with the items.
  */
 void checkSuccess(){
-  updateServo(false);
-  //if there is no known tag on either plate, leave
-  if(pouchesPlate.plateWeight == 0 || coinsPlate.plateWeight == 0)
+  //no tags on a plate, or weights don't match: show nay and leave.
+  //(only touch the servo here on an actual mismatch — writing nay
+  //unconditionally made the servo flap nay->yay every scan while balanced)
+  if(pouchesPlate.plateWeight == 0 || coinsPlate.plateWeight == 0
+     || pouchesPlate.plateWeight != coinsPlate.plateWeight){
+    updateServo(false);
     return;
-  //if the weights of the plate doesn't match, leave
-  if(pouchesPlate.plateWeight != coinsPlate.plateWeight)
-    return;
+  }
 
   //weights match, update servo to yay
   updateServo(true);
