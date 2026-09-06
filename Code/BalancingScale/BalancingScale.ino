@@ -8,7 +8,7 @@
 #include <HardwareSerial.h>
 #include <ESP32Servo.h>
 
-#define VERSION "1.3.0"
+#define VERSION "1.3.1"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -321,6 +321,9 @@ void setupWiFi() {
     Serial.print("-");
   }
   Serial.println("\nConnected.");
+  Serial.print("IP: "); Serial.print(WiFi.localIP());
+  Serial.print("  GW: "); Serial.print(WiFi.gatewayIP());
+  Serial.print("  RSSI: "); Serial.println(WiFi.RSSI());
 }
 
 //MQTT SERVER
