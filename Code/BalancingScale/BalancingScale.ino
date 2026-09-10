@@ -287,6 +287,13 @@ const Pouch<ID_LENGTH> sPouches[NUM_OF_SPICE_POUCHES] = {
 };
 
 //Known IDs for the coins and their represented weights.
+//ROOM NAMES (owner, 2026-09-10) - the players' rules call these coins:
+//  GoldDoubloon    = "gold"   = 1.00
+//  PieceOfEight    = "silver" = 0.75   (NOT a historical piece of eight - a puzzle value)
+//  HalfDoubloon    = "copper" = 0.50
+//  QuarterDoubloon = "bronze" = 0.25
+//The struct names below are the contractor's; the values are what the scale
+//checks. Two coins of each type. A plate reads at most MAX_READABLE tags.
 const Coin<ID_LENGTH> coins[NUM_OF_COINS] = {
   //example of initialization of coins
   GoldDoubloon<ID_LENGTH>({0x80, 0xD5, 0xCF,0x21}),
