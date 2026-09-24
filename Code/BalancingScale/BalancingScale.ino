@@ -7,8 +7,9 @@
 #include <PubSubClient.h>
 #include <HardwareSerial.h>
 #include <ESP32Servo.h>
+#include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 
-#define VERSION "1.3.1"
+#define VERSION "1.4.0"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -255,6 +256,9 @@ byte uid[ID_LENGTH * MAX_READABLE];
 
 const char* WIFI_SSID = "AlchemyGuest";
 const char* WIFI_PASS = "VoodooVacation5601";
+const char* OTA_PASSWORD = WIFI_PASS;   // protocol: OTA password = Wi-Fi password
+#define OTA_HOSTNAME PROP_NAME          // protocol: hostname = DEVICE_NAME
+#define OTA_PORT     3232               // classic ESP32 default
 
 // MQTT broker
 const char* MQTT_SERVER = "10.1.10.115";
@@ -333,6 +337,31 @@ void setupWiFi() {
   Serial.print("  RSSI: "); Serial.println(WiFi.RSSI());
 }
 
+/**
+ * @brief Over-the-air update listener (fleet protocol, mandatory since
+ *        2026-09-22). hostname = BalancingScale, port 3232, password = Wi-Fi.
+ *        Flash wirelessly with:
+ *          arduino-cli upload --fqbn esp32:esp32:esp32 -p <board IP>
+ *              --upload-field password=<Wi-Fi pw> Code/BalancingScale
+ *        The IP is in every STATUS reply and the boot line on /log.
+ *        No task WDT on this board, so nothing to feed during upload.
+ */
+void setupOTA() {
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.onStart([]() {
+    // Only actuator is the indicator servo - park it so it is not mid-swing
+    // on the reboot. Readers just stop being polled.
+    servoMid();
+    mqttLogf("OTA update starting - scale holds, back in ~30 s");
+    mqttClient.loop();
+  });
+  ArduinoOTA.onEnd([]()   { Serial.println("OTA done, rebooting"); });
+  ArduinoOTA.onError([](ota_error_t e) { Serial.printf("OTA error %u\n", (unsigned)e); });
+  ArduinoOTA.begin();
+  Serial.printf("OTA ready: %s @ %s:%d\n", OTA_HOSTNAME, WiFi.localIP().toString().c_str(), OTA_PORT);
+}
+
 //MQTT SERVER
 void connectMQTT() {
   while (!mqttClient.connected()) {
@@ -351,11 +380,14 @@ void connectMQTT() {
 
       // Announce we're online
       mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
-      mqttLogf("%s v%s online", PROP_NAME, VERSION);
+      mqttLogf("%s v%s online IP:%s OTA:%d RSSI:%d", PROP_NAME, VERSION,
+               WiFi.localIP().toString().c_str(), OTA_PORT, WiFi.RSSI());
 
     } else {
       Serial.printf("failed (rc=%d), retrying in 5s\n", mqttClient.state());
-      delay(5000);
+      // Keep the OTA listener alive while the broker is down so a bad
+      // build that cannot reach MQTT can still be replaced wirelessly.
+      for (int i = 0; i < 50; i++) { ArduinoOTA.handle(); delay(100); }
     }
   }
 }
@@ -484,11 +516,11 @@ void publishDiagnostics(){
       count++;
   char diag[192];
   snprintf(diag, sizeof(diag),
-    "%s v%s | State=%s | Spice=%.2f | Coins=%.2f | Matched=%d/5 | IP=%s | RSSI=%d | UP%lus",
+    "%s v%s | State=%s | Spice=%.2f | Coins=%.2f | Matched=%d/5 | IP:%s | OTA:%d | RSSI=%d | UP%lus",
     PROP_NAME, VERSION,
     puzzleSolved ? "SOLVED" : "ONLINE",
     pouchesPlate.plateWeight, coinsPlate.plateWeight, count,
-    WiFi.localIP().toString().c_str(), WiFi.RSSI(), millis() / 1000UL);
+    WiFi.localIP().toString().c_str(), OTA_PORT, WiFi.RSSI(), millis() / 1000UL);
   mqttClient.publish(MQTT_TOPIC_STATUS, diag);
 }
 
@@ -1078,6 +1110,8 @@ void _init(){
   setupServo();
   //network setup
   setupWiFi();
+  //OTA listener - mandatory, right after Wi-Fi (protocol boot step 3)
+  setupOTA();
   //mqtt setup
   setupMQTT();
   //initialize BalancingScale params
@@ -1095,6 +1129,7 @@ void _init(){
  * program that will run in the main loop.
  */
 void program() {
+  ArduinoOTA.handle();  // mandatory: service OTA every loop
   if (!mqttClient.connected()) {
     connectMQTT();
   }
