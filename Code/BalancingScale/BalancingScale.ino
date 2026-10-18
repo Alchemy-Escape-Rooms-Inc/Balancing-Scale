@@ -9,7 +9,7 @@
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 
-#define VERSION "1.4.3"
+#define VERSION "1.4.4"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -636,7 +636,7 @@ void updateServo(bool state){
 }
 void servoMid(){
    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"center");
-   mServo.write(92);   //v1.4.3: was 70, sat in nay territory; 92 = halfway between nay 30 / yay 155
+   mServo.write(97);   //v1.4.4: dead center, tuned by eye on the real needle 2026-10-18 (was 70, then 92)
    servoState = 0;
 }
 /**
