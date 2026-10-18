@@ -9,7 +9,7 @@
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 
-#define VERSION "1.4.1"
+#define VERSION "1.4.2"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -265,7 +265,10 @@ const unsigned long WIFI_JOIN_TIMEOUT_MS = 20000;  // v1.4.1: reboot if Wi-Fi no
 const char* MQTT_SERVER = "10.1.10.115";
 const int MQTT_PORT = 1883;
 
-bool servoState = false;    //true = yay, false = nay
+//servo position: 0 = center, 1 = yay, -1 = nay. Starts at center (boot parks it
+//there). v1.4.2: was a bool that started "nay", so the first wrong answer was
+//treated as "already nay" and the needle never moved.
+int servoState = 0;
 
 float weights[5];     //array to hold the spices weight
 bool success[5] = {false,false,false,false,false}; //array for tracking the correct spice pouch solved
@@ -526,7 +529,7 @@ void puzzleReset(){
   for(int i = 0; i < 5; i++)
     success[i] = false;
   clearAllParameters();
-  updateServo(false);
+  servoMid();
   mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
   mqttLogf("PUZZLE_RESET complete");
 }
@@ -614,30 +617,20 @@ void servoNay(){
 
 
 void updateServo(bool state){
-  if(state){
-    if(state == servoState){
-      return;
-    }
-    else{
-      servoYay();
-      servoState = state;
-    }
-
-  } else {
-
-    if(state == servoState){
-      return;
-    }
-    else{
-      servoNay();
-      servoState = state;
-    }
-  }
- mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/ServoState").c_str(),(state) ? "true":"false");
+  int target = state ? 1 : -1;
+  if(target == servoState)
+    return;
+  if(state)
+    servoYay();
+  else
+    servoNay();
+  servoState = target;
+  mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/ServoState").c_str(),(state) ? "true":"false");
 }
 void servoMid(){
    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"center");
    mServo.write(70);
+   servoState = 0;
 }
 /**
  * @brief This function resets all the scale's stored
@@ -661,11 +654,16 @@ void clearAllParameters(){
  *        balanced the weight with the items.
  */
 void checkSuccess(){
-  //no tags on a plate, or weights don't match: show nay and leave.
+  //a plate is empty: nothing to judge yet, needle back to center.
+  if(pouchesPlate.plateWeight == 0 || coinsPlate.plateWeight == 0){
+    if(servoState != 0)
+      servoMid();
+    return;
+  }
+  //both plates loaded but the weights don't match: wrong answer, show nay.
   //(only touch the servo here on an actual mismatch — writing nay
   //unconditionally made the servo flap nay->yay every scan while balanced)
-  if(pouchesPlate.plateWeight == 0 || coinsPlate.plateWeight == 0
-     || pouchesPlate.plateWeight != coinsPlate.plateWeight){
+  if(pouchesPlate.plateWeight != coinsPlate.plateWeight){
     updateServo(false);
     return;
   }
