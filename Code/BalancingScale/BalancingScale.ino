@@ -9,7 +9,7 @@
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 
-#define VERSION "1.4.4"
+#define VERSION "1.4.5"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -246,6 +246,7 @@ byte CMD_GET_UID[5][9] = {
 };
 
 Servo mServo;
+int SERVO_MID_US = 1519;  //center needle, see servoMid()
 HardwareSerial rfid1(1);
 HardwareSerial rfid2(2);
 
@@ -479,6 +480,14 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     mqttLogf("SERVO_TEST angle=%d", angle);
     return;
   }
+  if (strncmp(msg, "SERVO_US:", 9) == 0) {
+    // tuning only: same approach as servoMid (from the yay side) to a raw pulse
+    // width, and make it the center until next reboot
+    SERVO_MID_US = constrain(atoi(msg + 9), 500, 2400);
+    servoMid();
+    mqttLogf("SERVO_US center=%dus", SERVO_MID_US);
+    return;
+  }
   if (strcmp(msg, "PUZZLE_RESET") == 0) {
     // Reset game state without rebooting
     puzzleReset();
@@ -636,7 +645,13 @@ void updateServo(bool state){
 }
 void servoMid(){
    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"center");
-   mServo.write(97);   //v1.4.4: dead center, tuned by eye on the real needle 2026-10-18 (was 70, then 92)
+   //v1.4.5: the needle linkage has slack - it stops short on whichever side it
+   //comes from. So always swing past center to the yay side first, then settle
+   //back. 1519us = 96.5 deg (attach range 500-2400us), tuned by eye 2026-10-18;
+   //whole degrees were either side of center (96 = nay-ish, 97 = yay-ish).
+   mServo.write(110);
+   delay(300);
+   mServo.writeMicroseconds(SERVO_MID_US);
    servoState = 0;
 }
 /**
