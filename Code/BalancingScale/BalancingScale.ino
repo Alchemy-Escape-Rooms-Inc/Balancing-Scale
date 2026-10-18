@@ -9,7 +9,7 @@
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 
-#define VERSION "1.4.0"
+#define VERSION "1.4.1"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -257,6 +257,7 @@ byte uid[ID_LENGTH * MAX_READABLE];
 const char* WIFI_SSID = "AlchemyGuest";
 const char* WIFI_PASS = "VoodooVacation5601";
 const char* OTA_PASSWORD = WIFI_PASS;   // protocol: OTA password = Wi-Fi password
+const unsigned long WIFI_JOIN_TIMEOUT_MS = 20000;  // v1.4.1: reboot if Wi-Fi not up in 20s
 #define OTA_HOSTNAME PROP_NAME          // protocol: hostname = DEVICE_NAME
 #define OTA_PORT     3232               // classic ESP32 default
 
@@ -325,9 +326,19 @@ void setupWiFi() {
   Serial.print("Connecting to SSID: ");
   Serial.println(WIFI_SSID);
 
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID,WIFI_PASS);
 
+  // v1.4.1: a failed first join used to spin here forever (lights on, silent).
+  // Give it WIFI_JOIN_TIMEOUT_MS, then reboot and try again from scratch.
+  unsigned long joinStart = millis();
   while(WiFi.status() != WL_CONNECTED){
+    if (millis() - joinStart > WIFI_JOIN_TIMEOUT_MS) {
+      Serial.println("\nWi-Fi join timed out - rebooting");
+      delay(250);
+      ESP.restart();
+    }
     delay(100);
     Serial.print("-");
   }
@@ -364,7 +375,21 @@ void setupOTA() {
 
 //MQTT SERVER
 void connectMQTT() {
+  unsigned long wifiLostAt = 0;
   while (!mqttClient.connected()) {
+    // v1.4.1: Wi-Fi dropped mid-run - autoreconnect gets WIFI_JOIN_TIMEOUT_MS,
+    // then reboot (setupWiFi used to run only at boot, so this spun forever).
+    if (WiFi.status() != WL_CONNECTED) {
+      if (wifiLostAt == 0) wifiLostAt = millis();
+      if (millis() - wifiLostAt > WIFI_JOIN_TIMEOUT_MS) {
+        Serial.println("Wi-Fi lost - rebooting");
+        delay(250);
+        ESP.restart();
+      }
+      delay(100);
+      continue;
+    }
+    wifiLostAt = 0;
     Serial.print("Connecting to MQTT...");
 
     String clientId = PROP_NAME;
