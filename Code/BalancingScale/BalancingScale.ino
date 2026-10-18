@@ -9,7 +9,7 @@
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 
-#define VERSION "1.4.6"
+#define VERSION "1.4.7"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -270,6 +270,11 @@ const int MQTT_PORT = 1883;
 //there). v1.4.2: was a bool that started "nay", so the first wrong answer was
 //treated as "already nay" and the needle never moved.
 int servoState = 0;
+
+//consecutive failed reads per plate before it counts as empty (~1s per scan)
+#define MAX_READ_MISSES 3
+int pouchMisses = 0;
+int coinMisses = 0;
 
 float weights[5];     //array to hold the spices weight
 bool success[5] = {false,false,false,false,false}; //array for tracking the correct spice pouch solved
@@ -862,64 +867,41 @@ void storeUID(int index, bool isPlateForPouches){
 }
 
 
+//v1.4.7: drop every stored tag the reader no longer sees. The old version
+//shared one mismatch counter across tags and skipped the slot after each
+//removal, so it could drop a tag still on the plate (or leave a lifted one
+//behind for extra scans) - the needle sat on nay/yay with a plate empty.
+template<byte N>
+void removeMissing(ScalePlates<N> & plate, int tagCount){
+  //walk backwards so removeStorage's left shift never skips a slot
+  for(int i = plate.index - 1; i >= 0; i--){
+    bool seen = false;
+    for(int j = 0; j < tagCount; j++){
+      if(isAMatchingID(plate.storage[i].id,&uid[j*ID_LENGTH])){
+        seen = true;
+        break;
+      }
+    }
+    if(!seen)
+      plate.removeStorage(i);
+  }
+}
+
 void checkForRemoval(int tagCount,bool isPlateForPouches){
-  //check to see if the same tag count matches the IDs stored on the plates
+  //nothing can have been removed if the reader still sees as many tags as stored
   if(isPlateForPouches){
     if(tagCount >= pouchesPlate.index)
       return;
+    removeMissing(pouchesPlate,tagCount);
+    mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/Spice").c_str(),"");
+    if(pouchesPlate.index == 0)
+      mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/Spice/weight").c_str(),"");
   } else{
     if(tagCount >= coinsPlate.index)
       return;
-  }
-
-
-  //if the count is less than what is stored in the plates,
-  //find the correct tag, and remove it from the plate storage
-
-  int count = 0;  //keep track of unmatched ID
-
-  if(isPlateForPouches){
-    for(int i = 0; i < pouchesPlate.index; i++){
-      for(int j = 0; j < tagCount; j++){
-        if(isAMatchingID(pouchesPlate.storage[i].id,&uid[j*ID_LENGTH])){
-          count = 0; //reset
-          continue;
-        }
-        else {
-          count++;
-        }
-      }
-      //remove unmatching ID from plate
-      // mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/pouchesStorage").c_str(),"Removing from storage.");
-      if(count >= tagCount)
-        pouchesPlate.removeStorage(i);
-
-
-      mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/Spice").c_str(),"");
-      if(pouchesPlate.plateWeight == 0)
-        mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/Spice/weight").c_str(),"");
-    }
-  }
-  else{
-
-    for(int i = 0; i < coinsPlate.index; i++){
-      for(int j = 0; j < tagCount; j++){
-        if(isAMatchingID(coinsPlate.storage[i].id,&uid[j*ID_LENGTH])){
-          count = 0; //reset
-          continue;
-        }
-        else {
-          count++;
-        }
-      }
-      //remove unmatching ID from plate
-      //mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) +"/coinsStorage").c_str(),"Removing from storage.");
-      if(count >= tagCount)
-        coinsPlate.removeStorage(i);
-
-      if(coinsPlate.plateWeight == 0)
-        mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/Coins/weight").c_str(),"");
-    }
+    removeMissing(coinsPlate,tagCount);
+    if(coinsPlate.index == 0)
+      mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/Coins/weight").c_str(),"");
   }
 }
 
@@ -1079,11 +1061,16 @@ void listen(Stream& serial, bool isPlateForPouches) {
   int count = getTagCount(serial);
   delay(10);
 
-  //bad frame / no response: don't treat it as "all tags removed"
+  //bad frame / no response: one miss is not "all tags removed", but a reader
+  //that stays silent reads nothing - empty that plate so the needle centers
+  int & misses = isPlateForPouches ? pouchMisses : coinMisses;
   if(count < 0){
     clearUID();
+    if(++misses >= MAX_READ_MISSES)
+      checkForRemoval(0,isPlateForPouches);
     return;
   }
+  misses = 0;
 
   for(int i = 0; i < count; i++){
     //get each UID of each tags detected
@@ -1182,9 +1169,8 @@ void program() {
 
   heartBeat();
 
-  if(puzzleSolved)
-    return;
-
+  //v1.4.7: keep scanning after the solve so the needle still returns to
+  //center when the plates are emptied (checkSuccess won't re-publish SOLVED)
   unsigned long currentTime = millis();
   if(!(currentTime - sLastTime >= scanPeriod))
     return;
