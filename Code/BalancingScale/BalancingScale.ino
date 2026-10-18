@@ -9,7 +9,7 @@
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 
-#define VERSION "1.4.2"
+#define VERSION "1.4.3"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -472,6 +472,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     ESP.restart();
     return;
   }
+  if (strncmp(msg, "SERVO_TEST:", 11) == 0) {
+    // tuning only: move the needle to a raw angle (0-180), nothing saved
+    int angle = constrain(atoi(msg + 11), 0, 180);
+    mServo.write(angle);
+    mqttLogf("SERVO_TEST angle=%d", angle);
+    return;
+  }
   if (strcmp(msg, "PUZZLE_RESET") == 0) {
     // Reset game state without rebooting
     puzzleReset();
@@ -629,7 +636,7 @@ void updateServo(bool state){
 }
 void servoMid(){
    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"center");
-   mServo.write(70);
+   mServo.write(92);   //v1.4.3: was 70, sat in nay territory; 92 = halfway between nay 30 / yay 155
    servoState = 0;
 }
 /**
