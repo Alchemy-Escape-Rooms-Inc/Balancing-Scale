@@ -9,7 +9,7 @@
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 
-#define VERSION "1.4.5"
+#define VERSION "1.4.6"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -246,7 +246,7 @@ byte CMD_GET_UID[5][9] = {
 };
 
 Servo mServo;
-int SERVO_MID_US = 1519;  //center needle, see servoMid()
+int SERVO_MID_US = 1566;  //center needle (101 deg), on the line by eye 2026-10-18; see servoMid()
 HardwareSerial rfid1(1);
 HardwareSerial rfid2(2);
 
@@ -647,8 +647,8 @@ void servoMid(){
    mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/servo").c_str(),"center");
    //v1.4.5: the needle linkage has slack - it stops short on whichever side it
    //comes from. So always swing past center to the yay side first, then settle
-   //back. 1519us = 96.5 deg (attach range 500-2400us), tuned by eye 2026-10-18;
-   //whole degrees were either side of center (96 = nay-ish, 97 = yay-ish).
+   //back. Center = SERVO_MID_US (attach range 500-2400us, ~10.6us/deg).
+   //Live-tune with SERVO_US:<us> on /command.
    mServo.write(110);
    delay(300);
    mServo.writeMicroseconds(SERVO_MID_US);
