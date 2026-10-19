@@ -8,8 +8,9 @@
 #include <HardwareSerial.h>
 #include <ESP32Servo.h>
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
+#include <esp_task_wdt.h>  // v1.4.8: loop watchdog
 
-#define VERSION "1.4.7"
+#define VERSION "1.4.8"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -52,6 +53,7 @@ template<byte N>
 struct IDStorage {
   float weight;       //Represented weight of the RFID object.
   byte id[ID_LENGTH]; //ID of the RFID object.
+  byte unseen = 0;    //v1.4.8: consecutive scans the reader missed this tag
 
   /**
    * @brief Default constructor, which initialize all values to 0.
@@ -191,8 +193,10 @@ struct ScalePlates {
         if((i + 1) != index)
           storage[i].id[j] = storage[i+1].id[j];
       }
-      if((i + 1) != index)
+      if((i + 1) != index){
         storage[i].weight = storage[i+1].weight;
+        storage[i].unseen = storage[i+1].unseen;
+      }
     }
   }
 
@@ -206,6 +210,7 @@ struct ScalePlates {
     for(int i  = 0; i < ID_LENGTH; i++)
       storage[cIndex].id[i] = 0;
     storage[cIndex].weight = 0.0;
+    storage[cIndex].unseen = 0;
   }
 
 
@@ -259,6 +264,36 @@ const char* WIFI_SSID = "AlchemyGuest";
 const char* WIFI_PASS = "VoodooVacation5601";
 const char* OTA_PASSWORD = WIFI_PASS;   // protocol: OTA password = Wi-Fi password
 const unsigned long WIFI_JOIN_TIMEOUT_MS = 20000;  // v1.4.1: reboot if Wi-Fi not up in 20s
+// v1.4.8: board froze twice (10-18 19:00, 10-19 11:32) with Wi-Fi still pinging
+// but the loop dead (no MQTT, no OTA). Hardware watchdog reboots on any stall;
+// MQTT_DEAD_REBOOT_MS reboots if the broker stays unreachable with Wi-Fi up.
+const uint32_t      LOOP_WDT_TIMEOUT_MS  = 30000;
+const unsigned long MQTT_DEAD_REBOOT_MS  = 60000;
+
+const char* resetReasonName() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return "POWERON";
+    case ESP_RST_SW:       return "SOFTWARE";
+    case ESP_RST_PANIC:    return "PANIC";
+    case ESP_RST_INT_WDT:  return "INT_WDT";
+    case ESP_RST_TASK_WDT: return "TASK_WDT";
+    case ESP_RST_WDT:      return "WDT";
+    case ESP_RST_BROWNOUT: return "BROWNOUT";
+    case ESP_RST_DEEPSLEEP:return "DEEPSLEEP";
+    case ESP_RST_EXT:      return "EXTERNAL";
+    default:               return "UNKNOWN";
+  }
+}
+
+void setupLoopWatchdog() {
+  esp_task_wdt_config_t cfg = {
+    .timeout_ms = LOOP_WDT_TIMEOUT_MS,
+    .idle_core_mask = 0,      // watch the loop task only
+    .trigger_panic = true,    // stall -> reboot (boot line reads RESET:TASK_WDT)
+  };
+  if (esp_task_wdt_reconfigure(&cfg) != ESP_OK) esp_task_wdt_init(&cfg);
+  esp_task_wdt_add(NULL);
+}
 #define OTA_HOSTNAME PROP_NAME          // protocol: hostname = DEVICE_NAME
 #define OTA_PORT     3232               // classic ESP32 default
 
@@ -273,8 +308,6 @@ int servoState = 0;
 
 //consecutive failed reads per plate before it counts as empty (~1s per scan)
 #define MAX_READ_MISSES 3
-int pouchMisses = 0;
-int coinMisses = 0;
 
 float weights[5];     //array to hold the spices weight
 bool success[5] = {false,false,false,false,false}; //array for tracking the correct spice pouch solved
@@ -364,7 +397,8 @@ void setupWiFi() {
  *          arduino-cli upload --fqbn esp32:esp32:esp32 -p <board IP>
  *              --upload-field password=<Wi-Fi pw> Code/BalancingScale
  *        The IP is in every STATUS reply and the boot line on /log.
- *        No task WDT on this board, so nothing to feed during upload.
+ *        v1.4.8: loop task WDT is armed - onProgress feeds it so a 15-30 s
+ *        upload cannot trip the 30 s timeout.
  */
 void setupOTA() {
   ArduinoOTA.setHostname(OTA_HOSTNAME);
@@ -376,6 +410,7 @@ void setupOTA() {
     mqttLogf("OTA update starting - scale holds, back in ~30 s");
     mqttClient.loop();
   });
+  ArduinoOTA.onProgress([](unsigned int, unsigned int) { esp_task_wdt_reset(); });
   ArduinoOTA.onEnd([]()   { Serial.println("OTA done, rebooting"); });
   ArduinoOTA.onError([](ota_error_t e) { Serial.printf("OTA error %u\n", (unsigned)e); });
   ArduinoOTA.begin();
@@ -385,7 +420,9 @@ void setupOTA() {
 //MQTT SERVER
 void connectMQTT() {
   unsigned long wifiLostAt = 0;
+  unsigned long mqttDownSince = millis();
   while (!mqttClient.connected()) {
+    esp_task_wdt_reset();
     // v1.4.1: Wi-Fi dropped mid-run - autoreconnect gets WIFI_JOIN_TIMEOUT_MS,
     // then reboot (setupWiFi used to run only at boot, so this spun forever).
     if (WiFi.status() != WL_CONNECTED) {
@@ -399,6 +436,11 @@ void connectMQTT() {
       continue;
     }
     wifiLostAt = 0;
+    if (millis() - mqttDownSince > MQTT_DEAD_REBOOT_MS) {
+      Serial.println("MQTT unreachable with Wi-Fi up - rebooting");
+      delay(250);
+      ESP.restart();
+    }
     Serial.print("Connecting to MQTT...");
 
     String clientId = PROP_NAME;
@@ -414,14 +456,15 @@ void connectMQTT() {
 
       // Announce we're online
       mqttClient.publish(MQTT_TOPIC_STATUS, "ONLINE", true);
-      mqttLogf("%s v%s online IP:%s OTA:%d RSSI:%d", PROP_NAME, VERSION,
-               WiFi.localIP().toString().c_str(), OTA_PORT, WiFi.RSSI());
+      mqttLogf("%s v%s online IP:%s OTA:%d RSSI:%d UP:%lus RESET:%s", PROP_NAME, VERSION,
+               WiFi.localIP().toString().c_str(), OTA_PORT, WiFi.RSSI(),
+               millis() / 1000UL, resetReasonName());
 
     } else {
       Serial.printf("failed (rc=%d), retrying in 5s\n", mqttClient.state());
       // Keep the OTA listener alive while the broker is down so a bad
       // build that cannot reach MQTT can still be replaced wirelessly.
-      for (int i = 0; i < 50; i++) { ArduinoOTA.handle(); delay(100); }
+      for (int i = 0; i < 50; i++) { ArduinoOTA.handle(); esp_task_wdt_reset(); delay(100); }
     }
   }
 }
@@ -871,8 +914,13 @@ void storeUID(int index, bool isPlateForPouches){
 //shared one mismatch counter across tags and skipped the slot after each
 //removal, so it could drop a tag still on the plate (or leave a lifted one
 //behind for extra scans) - the needle sat on nay/yay with a plate empty.
+//v1.4.8: a tag only counts as lifted after MAX_READ_MISSES scans in a row
+//without it. With several coins down the reader routinely skips one or two
+//for a single scan; dropping them at once swung the needle back and forth
+//with nothing touched (owner 2026-10-19). Returns how many tags were dropped.
 template<byte N>
-void removeMissing(ScalePlates<N> & plate, int tagCount){
+int removeMissing(ScalePlates<N> & plate, int tagCount){
+  int removed = 0;
   //walk backwards so removeStorage's left shift never skips a slot
   for(int i = plate.index - 1; i >= 0; i--){
     bool seen = false;
@@ -882,24 +930,26 @@ void removeMissing(ScalePlates<N> & plate, int tagCount){
         break;
       }
     }
-    if(!seen)
+    if(seen){
+      plate.storage[i].unseen = 0;
+    } else if(++plate.storage[i].unseen >= MAX_READ_MISSES){
       plate.removeStorage(i);
+      removed++;
+    }
   }
+  return removed;
 }
 
 void checkForRemoval(int tagCount,bool isPlateForPouches){
-  //nothing can have been removed if the reader still sees as many tags as stored
   if(isPlateForPouches){
-    if(tagCount >= pouchesPlate.index)
+    if(removeMissing(pouchesPlate,tagCount) == 0)
       return;
-    removeMissing(pouchesPlate,tagCount);
     mqttClient.publish(String(String(MQTT_TOPIC_MESSAGE) + "/Spice").c_str(),"");
     if(pouchesPlate.index == 0)
       mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/Spice/weight").c_str(),"");
   } else{
-    if(tagCount >= coinsPlate.index)
+    if(removeMissing(coinsPlate,tagCount) == 0)
       return;
-    removeMissing(coinsPlate,tagCount);
     if(coinsPlate.index == 0)
       mqttClient.publish(String(String(MQTT_TOPIC_SYSTEM) + "/Coins/weight").c_str(),"");
   }
@@ -1061,16 +1111,14 @@ void listen(Stream& serial, bool isPlateForPouches) {
   int count = getTagCount(serial);
   delay(10);
 
-  //bad frame / no response: one miss is not "all tags removed", but a reader
-  //that stays silent reads nothing - empty that plate so the needle centers
-  int & misses = isPlateForPouches ? pouchMisses : coinMisses;
+  //bad frame / no response counts as a scan that saw nothing: every stored
+  //tag gets a miss, so a reader that stays silent empties its plate after
+  //MAX_READ_MISSES scans and the needle centers (v1.4.8: per-tag counters)
   if(count < 0){
     clearUID();
-    if(++misses >= MAX_READ_MISSES)
-      checkForRemoval(0,isPlateForPouches);
+    checkForRemoval(0,isPlateForPouches);
     return;
   }
-  misses = 0;
 
   for(int i = 0; i < count; i++){
     //get each UID of each tags detected
@@ -1152,6 +1200,8 @@ void _init(){
   servoMid();
   //add delay for rfids to fully boot
   delay(1000); //1 sec
+  //v1.4.8: arm the loop watchdog last so slow boot steps can't trip it
+  setupLoopWatchdog();
 }
 
 /**
@@ -1161,6 +1211,7 @@ void _init(){
  * program that will run in the main loop.
  */
 void program() {
+  esp_task_wdt_reset();  // v1.4.8: loop is alive
   ArduinoOTA.handle();  // mandatory: service OTA every loop
   if (!mqttClient.connected()) {
     connectMQTT();
