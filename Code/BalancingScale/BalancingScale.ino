@@ -10,7 +10,7 @@
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 #include <esp_task_wdt.h>  // v1.4.8: loop watchdog
 
-#define VERSION "1.4.8"
+#define VERSION "1.4.9"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -983,11 +983,14 @@ int readResponse(Stream& serial, byte* buffer, int maxLen, int timeout = 100) {
   int index = 0;
   unsigned long start = millis();
   while ((millis() - start) < timeout) {
+    // Always drain the UART: with a full buffer and a reader still talking,
+    // available() never went false and this spun until the loop watchdog
+    // rebooted the board (v1.4.8 RESET:TASK_WDT every ~37 s).
     while (serial.available()) {
-      if (index < maxLen) {
-        buffer[index++] = serial.read();
-      }
+      byte b = serial.read();
+      if (index < maxLen) buffer[index++] = b;
     }
+    if (index >= maxLen) break;
   }
   return index;
 }
