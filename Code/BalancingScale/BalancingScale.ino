@@ -10,7 +10,7 @@
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 #include <esp_task_wdt.h>  // v1.4.8: loop watchdog
 
-#define VERSION "1.5.0"
+#define VERSION "1.5.1"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -309,6 +309,11 @@ int servoState = 0;
 //consecutive failed reads per plate before it counts as empty (~1s per scan)
 #define MAX_READ_MISSES 3
 
+//v1.5.1: RFIDDIAG on /command = for 5 min, report EVERY reader reply on
+///message/diag (good, silent or garbage) for live wire-wiggle testing
+unsigned long rfidDiagUntil = 0;
+bool rfidDiagOn() { return rfidDiagUntil != 0 && (long)(rfidDiagUntil - millis()) > 0; }
+
 float weights[5];     //array to hold the spices weight
 bool success[5] = {false,false,false,false,false}; //array for tracking the correct spice pouch solved
 
@@ -550,6 +555,16 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
+  if (strcmp(msg, "RFIDDIAG") == 0) {
+    rfidDiagUntil = millis() + 300000UL;
+    mqttLogf("RFID diag ON for 5 min -> %s/diag", MQTT_TOPIC_MESSAGE);
+    return;
+  }
+  if (strcmp(msg, "RFIDDIAG_OFF") == 0) {
+    rfidDiagUntil = 0;
+    mqttLogf("RFID diag OFF");
+    return;
+  }
   if (strcmp(msg, "HALTCOIN") == 0) {
     haltReader(rfid2);
     mqttClient.publish(MQTT_TOPIC_MESSAGE, "Halting coins' plate rfid field.");
@@ -1016,6 +1031,14 @@ void reportBadFrame(const char* plate, byte* buf, int len) {
   static unsigned long lastReport[2] = {0, 0};
   static unsigned long suppressed[2] = {0, 0};
   int p = (plate[0] == 'S') ? 0 : 1;
+  if (rfidDiagOn()) {
+    char d[100];
+    int n = snprintf(d, sizeof(d), "%s BAD %d bytes:", plate, len);
+    for (int i = 0; i < len && i < 16 && n < (int)sizeof(d) - 4; i++)
+      n += snprintf(d + n, sizeof(d) - n, " %02X", buf[i]);
+    mqttClient.publish((String(MQTT_TOPIC_MESSAGE) + "/diag").c_str(), d);
+    return;
+  }
   if (lastReport[p] != 0 && millis() - lastReport[p] < 60000UL) {
     suppressed[p]++;
     return;
@@ -1039,8 +1062,12 @@ int getTagCount(Stream& serial, const char* plate) {
   int len = readResponse(serial,response, sizeof(response));
 
   //no reply / too short to hold a count = silent scan (not a bad frame)
-  if (len < 8)
+  if (len < 8) {
+    if (rfidDiagOn())
+      mqttClient.publish((String(MQTT_TOPIC_MESSAGE) + "/diag").c_str(),
+                         (String(plate) + " SILENT " + String(len) + " bytes").c_str());
     return -1;
+  }
   int f = findFrame(response, len, 8);
   if (f < 0) {
     reportBadFrame(plate, response, len);
@@ -1048,6 +1075,9 @@ int getTagCount(Stream& serial, const char* plate) {
   }
 
   int count = response[f + 7];  // 8th byte of the frame
+  if (rfidDiagOn())
+    mqttClient.publish((String(MQTT_TOPIC_MESSAGE) + "/diag").c_str(),
+                       (String(plate) + " OK tags=" + String(count)).c_str());
   if (count < 0)
     return 0;
   if (count > MAX_READABLE)  // CMD_GET_UID only has MAX_READABLE entries
