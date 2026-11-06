@@ -10,7 +10,7 @@
 #include <ArduinoOTA.h>   // mandatory fleet protocol (2026-09-22): wireless re-flash
 #include <esp_task_wdt.h>  // v1.4.8: loop watchdog
 
-#define VERSION "1.4.9"
+#define VERSION "1.5.0"
 
 #define GAME_NAME "MermaidsTale"
 #define PROP_NAME "BalancingScale"
@@ -995,7 +995,42 @@ int readResponse(Stream& serial, byte* buffer, int maxLen, int timeout = 100) {
   return index;
 }
 
-int getTagCount(Stream& serial) {
+//v1.5.0: find the start of a real reader frame anywhere in the reply instead
+//of demanding it at byte 0. A frame is F5, lenLo, lenHi, ~lenLo, ~lenHi, ...
+//(same layout as our commands, e.g. F5 03 00 FC FF). Stray leftover bytes in
+//front of the frame used to throw the whole read away as "Bad frame." about
+//once a second. Returns the frame's offset, or -1 if no full frame is there.
+int findFrame(byte* buf, int len, int minLen) {
+  for (int i = 0; i + minLen <= len; i++) {
+    if (buf[i] == 0xF5 &&
+        (byte)(buf[i+1] ^ buf[i+3]) == 0xFF &&
+        (byte)(buf[i+2] ^ buf[i+4]) == 0xFF)
+      return i;
+  }
+  return -1;
+}
+
+//rate-limited report of a reply with no frame in it: names the plate and dumps
+//the first bytes so the cause can be seen (was a bare "Bad frame." every ~1 s)
+void reportBadFrame(const char* plate, byte* buf, int len) {
+  static unsigned long lastReport[2] = {0, 0};
+  static unsigned long suppressed[2] = {0, 0};
+  int p = (plate[0] == 'S') ? 0 : 1;
+  if (lastReport[p] != 0 && millis() - lastReport[p] < 60000UL) {
+    suppressed[p]++;
+    return;
+  }
+  char msg[128];
+  int n = snprintf(msg, sizeof(msg), "Bad frame (%s plate, %d bytes, %lu more in last min):",
+                   plate, len, suppressed[p]);
+  for (int i = 0; i < len && i < 16 && n < (int)sizeof(msg) - 4; i++)
+    n += snprintf(msg + n, sizeof(msg) - n, " %02X", buf[i]);
+  mqttClient.publish(MQTT_TOPIC_MESSAGE, msg);
+  lastReport[p] = millis();
+  suppressed[p] = 0;
+}
+
+int getTagCount(Stream& serial, const char* plate) {
   flushRx(serial);  //flush out buffer
   byte response[32];
 
@@ -1003,16 +1038,16 @@ int getTagCount(Stream& serial) {
   delay(50);
   int len = readResponse(serial,response, sizeof(response));
 
-  //check if length of response is long enough
+  //no reply / too short to hold a count = silent scan (not a bad frame)
   if (len < 8)
     return -1;
-  //check if response starts with appropriate frame header
-  if(response[0] != 0xF5){
-    mqttClient.publish(MQTT_TOPIC_MESSAGE,"Bad frame.");
+  int f = findFrame(response, len, 8);
+  if (f < 0) {
+    reportBadFrame(plate, response, len);
     return -1;
   }
 
-  int count = response[7];  // 8th byte
+  int count = response[f + 7];  // 8th byte of the frame
   if (count < 0)
     return 0;
   if (count > MAX_READABLE)  // CMD_GET_UID only has MAX_READABLE entries
@@ -1031,10 +1066,13 @@ bool getUID(Stream& serial,byte * cmd, byte* uid) {
 
   if (len < 15)
     return false;
+  int f = findFrame(response, len, 15);  //v1.5.0: same resync as the count
+  if (f < 0)
+    return false;
 
-  // UID = bytes 8–11 (0-based index)
+  // UID = bytes 9-12 of the frame (0-based)
   for (int i = 0; i < 4; i++)
-    uid[i] = response[9 + i];
+    uid[i] = response[f + 9 + i];
 
   return true;
 }
@@ -1111,7 +1149,7 @@ void printSuccessToMQTT(int successIndex){
  *           which plate on the scale is to be used.
  */
 void listen(Stream& serial, bool isPlateForPouches) {
-  int count = getTagCount(serial);
+  int count = getTagCount(serial, isPlateForPouches ? "Spice" : "Coins");
   delay(10);
 
   //bad frame / no response counts as a scan that saw nothing: every stored
